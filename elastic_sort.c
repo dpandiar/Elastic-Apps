@@ -34,6 +34,7 @@ static int partitions = 20;
 double partition_overhead_coefficient_a = 175;
 double merge_overhead_coefficient_a = 10;
 double merge_overhead_coefficient_b = 380;
+double per_record_execution_time = 0.000003;
 
 unsigned long long get_total_lines(char *infile) {
 	FILE *input_file = fopen(infile, "r");
@@ -266,7 +267,6 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	double total_execution_time;
 	double *estimated_times;
 
-	double per_record_execution_time = 0.000003;
 	int BW_Bps = bandwidth * 1000000/8; //assume 100Mbps = 100000000/8 Bytes per sec to start
 	
 	double total_records_in_billion;	
@@ -297,7 +297,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	
 	/* Model of partition is based on the partitioning done in submit_tasks():
 	 * Its asymptotic runtime is O(n) where n is number of records in billions and m is number of partitions.
-	 * Its actual runtime is modeled as: (a*n). The values of a and b are found emprically.
+	 * Its actual runtime is modeled as: (a*n). The values of a and b are found by sampling.
 	 */	
 	if(partition_overhead_coefficient_a <= 0) 
 		partition_overhead_coefficient_a = get_partition_coefficient(input_file);
@@ -306,8 +306,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	
 	/* Model of merge is based on the running time of merge_sorted_outputs():
 	 * Its asymptotic runtime is O(n*m) where n is number of records in billions and m is number of partitions.
-	 * Its actual runtime is modeled as: (a*n*m + b). The values of a and b are found emprically.
-	 * a = 12 and b = 450.
+	 * Its actual runtime is modeled as: (a*n*m + b*n). The values of a and b are found sampling.
 	 */
 	merge_overhead = (merge_overhead_coefficient_a * total_records_in_billion * tasks) + (merge_overhead_coefficient_b * total_records_in_billion);	
 	
