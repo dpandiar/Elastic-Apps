@@ -290,7 +290,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	total_records_in_billion = total_records/1000000000.0;
 	
 	//we transfer the records twice - for input and output.
-	transfer_overhead = ((2*record_bytes) + (sw_bytes * resources)) / BW_Bps;
+	transfer_overhead = ((double)((2*record_bytes) + (sw_bytes * resources))) / BW_Bps;
 
 	parallel_execution_time = (total_records * per_record_execution_time) / tasks;	
 	parallel_execution_time *= ceil((double)tasks/(double)resources);
@@ -334,7 +334,7 @@ int print_optimal_runtimes(char *input_file, char *executable, int bandwidth, in
 	double partition_time = -1;
 	int optimal_partitions;
 	int i;
-	for (i = 1; i <= 2*resources; i++) { 	
+	for (i = 1; i <= 5*resources; i++) { 	
 		estimated_times = sort_estimate_runtime(input_file, executable, bandwidth, resources, i);
 		execution_time = estimated_times[0];
 		if (optimal_execution_time < 0 || execution_time < optimal_execution_time) {
@@ -342,6 +342,8 @@ int print_optimal_runtimes(char *input_file, char *executable, int bandwidth, in
 			optimal_partitions = i;
 			optimal_times[1] = estimated_times[1];
 			optimal_times[2] = estimated_times[2];
+			optimal_times[3] = estimated_times[3];
+			optimal_times[4] = estimated_times[4];
 		}	
 		free(estimated_times);	
 	}
