@@ -82,10 +82,8 @@ off_t get_file_line_end_offset(FILE *fp, off_t start_offset, unsigned long long 
 /* Partition the input file according to the number of partitions specified and
  * create tasks that sort each of these partitions.
  */
-int submit_tasks(struct work_queue *q, char *executable, char *executable_args, char *infile, char *outfile_prefix) {
+int partition_submit_tasks(struct work_queue *q, char *executable, char *executable_args, char *infile, char *outfile_prefix) {
 	char outfile[256], remote_infile[256], remote_executable[256], command[256];
-	struct work_queue_task *t;
-	int taskid;
 	int task_count = 0;	
 	
 	off_t prev_file_offset_end;
@@ -138,27 +136,37 @@ int submit_tasks(struct work_queue *q, char *executable, char *executable_args, 
 			sprintf(command, "./%s %s > %s", executable, remote_infile, outfile);
 		}
 
-		t = work_queue_task_create(command);
-		if (!work_queue_task_specify_file_piece(t, infile, remote_infile, prev_file_offset_end+1, file_offset_end, WORK_QUEUE_INPUT, WORK_QUEUE_NOCACHE)) {
-			printf("task_specify_file_piece() failed for %s: remote filename %s, start offset %ld, end offset %ld.\n", infile, remote_infile, prev_file_offset_end+1, file_offset_end);
-			return 0;	
-		}
-		if (!work_queue_task_specify_file(t, executable, remote_executable, WORK_QUEUE_INPUT, WORK_QUEUE_CACHE)) {
-			printf("task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", executable);
-			return 0;	
-		}
-		if (!work_queue_task_specify_file(t, outfile, outfile, WORK_QUEUE_OUTPUT, WORK_QUEUE_NOCACHE)) {
-			printf("task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", outfile);
-			return 0;	
-		}
+		submit_task(q, command, executable, infile, prev_file_offset_end+1, file_offset_end, outfile);
 	
-		taskid = work_queue_submit(q, t);
-		printf("submitted task (id# %d): %s\n", taskid, t->command_line);
 		task_count++;
 	}
 	
 	fclose(infile_fs);	
 	return task_count;
+}
+
+int submit_task(struct work_queue *q, char *command, char *executable, char *infile, off_t infile_offset_start, off_t infile_offset_end, char *outfile) {
+	struct work_queue_task *t;
+	int taskid;
+	
+	t = work_queue_task_create(command);
+	if (!work_queue_task_specify_file_piece(t, infile, basename(infile), infile_offset_start, infile_offset_end, WORK_QUEUE_INPUT, WORK_QUEUE_NOCACHE)) {
+		printf("task_specify_file_piece() failed for %s: remote filename %s, start offset %ld, end offset %ld.\n", infile, basename(infile), infile_offset_start, infile_offset_end);
+		return 0;	
+	}
+	if (!work_queue_task_specify_file(t, executable, basename(executable), WORK_QUEUE_INPUT, WORK_QUEUE_CACHE)) {
+		printf("task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", executable);
+		return 0;	
+	}
+	if (!work_queue_task_specify_file(t, outfile, outfile, WORK_QUEUE_OUTPUT, WORK_QUEUE_NOCACHE)) {
+		printf("task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", outfile);
+		return 0;	
+	}
+
+	taskid = work_queue_submit(q, t);
+	printf("submitted task (id# %d): %s\n", taskid, t->command_line);
+
+	return taskid;
 }
 
 int get_file_line_value(FILE *fp) {
@@ -301,7 +309,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	parallel_execution_time = (total_records * per_record_execution_time) / tasks;	
 	parallel_execution_time *= ceil((double)tasks/(double)resources);
 	
-	/* Model of partition is based on the partitioning done in submit_tasks():
+	/* Model of partition is based on the partitioning done in partition_submit_tasks():
 	 * Its asymptotic runtime is O(n) where n is number of records in billions and m is number of partitions.
 	 * Its actual runtime is modeled as: (a*n). The values of a and b are found by sampling.
 	 */	
@@ -469,14 +477,6 @@ int main(int argc, char *argv[])
 	sprintf(outfile_prefix, "%s.sorted", outfile_prefix);
 	free(infile_temp);
 
-	if(sample_env) {
-		//Reset the coefficients to 0 so we use the empirically determined values from sampling the execution environment.
-		partition_overhead_coefficient_a = 0;
-		merge_overhead_coefficient_a = 0;
-		merge_overhead_coefficient_b = 0;
-		per_record_execution_time = 0;
-	}
-
 	if(estimate_partition) {
 		double *estimated_runtimes = (double *)malloc(sizeof(double) * 5); 
 		for (i = 1; i <= 2*estimate_partition; i++) {
@@ -540,11 +540,19 @@ int main(int argc, char *argv[])
 
 	printf("%s will be run to sort contents of %s\n", sort_executable, infile);
 	
+	if(sample_env) {
+		//Reset the coefficients to 0 so we use the empirically determined values from sampling the execution environment.
+		partition_overhead_coefficient_a = 0;
+		merge_overhead_coefficient_a = 0;
+		merge_overhead_coefficient_b = 0;
+		per_record_execution_time = 0;
+	}
+
 	long long unsigned int part_start_time, part_end_time, part_time;
 	gettimeofday(&current, 0);
 	part_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	number_tasks = submit_tasks(q, sort_executable, sort_arguments, infile, outfile_prefix);
+	number_tasks = partition_submit_tasks(q, sort_executable, sort_arguments, infile, outfile_prefix);
     	
 	gettimeofday(&current, 0);
 	part_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
