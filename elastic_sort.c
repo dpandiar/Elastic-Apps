@@ -26,15 +26,21 @@
 
 #define LINE_SIZE 2048
 
+//Defaults
 #define BW_DEFAULT 100 //BW in Mbps
+#define PARTITION_DEFAULT 20
+#define PARTITION_COEFF_A_DEFAULT 175
+#define MERGE_COEFF_A_DEFAULT 10
+#define MERGE_COEFF_B_DEFAULT 380
+#define PER_RECORD_SORT_TIME_DEFAULT 0.000003
 
 static unsigned long long total_records = 0;
-static int partitions = 20;
+static int partitions = PARTITION_DEFAULT;
 
-double partition_overhead_coefficient_a = 175;
-double merge_overhead_coefficient_a = 10;
-double merge_overhead_coefficient_b = 380;
-double per_record_execution_time = 0.000003;
+double partition_overhead_coefficient_a = PARTITION_COEFF_A_DEFAULT;
+double merge_overhead_coefficient_a = MERGE_COEFF_A_DEFAULT;
+double merge_overhead_coefficient_b = MERGE_COEFF_B_DEFAULT;
+double per_record_execution_time = PER_RECORD_SORT_TIME_DEFAULT;
 
 unsigned long long get_total_lines(char *infile) {
 	FILE *input_file = fopen(infile, "r");
@@ -299,7 +305,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	 * Its asymptotic runtime is O(n) where n is number of records in billions and m is number of partitions.
 	 * Its actual runtime is modeled as: (a*n). The values of a and b are found by sampling.
 	 */	
-	if(partition_overhead_coefficient_a <= 0) 
+	if(!partition_overhead_coefficient_a) 
 		partition_overhead_coefficient_a = get_partition_coefficient(input_file);
 
 	partition_overhead = (partition_overhead_coefficient_a * total_records_in_billion); 
@@ -355,6 +361,7 @@ static void show_help(const char *cmd) {
 	fprintf(stdout, " %-30s Specify a project name for the Work Queue master. (default = none)\n", "-N <string>");
 	fprintf(stdout, " %-30s Specify the number of partitions to create of the input data. (default = 20)\n", "-k <int>");
 	fprintf(stdout, " %-30s Automatically determine the optimal partition size. (default = 20)\n", "-A <int>");
+	fprintf(stdout, " %-30s Empirically estimate the model coefficients by sampling the execution environment. (default = off)\n", "-S <int>");
 	fprintf(stdout, " %-30s Specify the arguments for the sort program.\n", "-p <string>");
 	fprintf(stdout, " %-30s Estimate and print the optimal number of partitions for different resource sizes and exit.\n", "-M");
 	fprintf(stdout, " %-30s Specify the number of records in the input file.(default=auto).\n", "-L <int>");
@@ -376,6 +383,7 @@ int main(int argc, char *argv[])
 	char *sort_arguments = NULL;
 	const char *proj_name = NULL;
 	int auto_partition = 0;	
+	int sample_env = 0;	
 	int print_runtime_estimates = 0;
 	int estimate_partition= 0;
 	struct timeval current;
@@ -383,16 +391,16 @@ int main(int argc, char *argv[])
 	int keepalive_interval = 300;
 	int keepalive_timeout = 30;
 
-        gettimeofday(&current, 0);
-        execn_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-	
+	gettimeofday(&current, 0);
+	execn_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+
 	debug_flags_set("all");
 	if(argc < 3) {
 		show_help(argv[0]);
 		return 0;
 	}
 		
-	while((c = getopt(argc, argv, "N:k:Ap:MR:L:I:T:B:h")) != (char) -1) {
+	while((c = getopt(argc, argv, "N:k:ASp:MR:L:I:T:B:h")) != (char) -1) {
 		switch (c) {
 		case 'N':
 			proj_name = strdup(optarg);
@@ -402,6 +410,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'A':
 			auto_partition = 1;
+			break;
+		case 'S':
+			sample_env = 1;
 			break;
 		case 'p':
 			sort_arguments = strdup(optarg);
@@ -457,6 +468,14 @@ int main(int argc, char *argv[])
 	}
 	sprintf(outfile_prefix, "%s.sorted", outfile_prefix);
 	free(infile_temp);
+
+	if(sample_env) {
+		//Reset the coefficients to 0 so we use the empirically determined values from sampling the execution environment.
+		partition_overhead_coefficient_a = 0;
+		merge_overhead_coefficient_a = 0;
+		merge_overhead_coefficient_b = 0;
+		per_record_execution_time = 0;
+	}
 
 	if(estimate_partition) {
 		double *estimated_runtimes = (double *)malloc(sizeof(double) * 5); 
