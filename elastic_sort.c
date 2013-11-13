@@ -82,52 +82,37 @@ off_t get_file_line_end_offset(FILE *fp, off_t start_offset, unsigned long long 
 /* Partition the input file according to the number of partitions specified and
  * create tasks that sort each of these partitions.
  */
-int partition_submit_tasks(struct work_queue *q, char *executable, char *executable_args, char *infile, char *outfile_prefix) {
-	char outfile[256], remote_infile[256], remote_executable[256], command[256];
+int partition_submit_tasks(struct work_queue *q, char *executable, char *executable_args, char *infile, int infile_offset_start, char *outfile_prefix, int total_records_to_sort) {
+	char outfile[256], remote_infile[256], command[256];
 	int task_count = 0;	
 	
-	off_t prev_file_offset_end;
+	off_t file_offset_start = infile_offset_start;
+	off_t file_offset_end;
 	unsigned long long task_end_line = 0;
 	unsigned long long lines_to_submit;
-	off_t file_offset_end = -1;
 	FILE *infile_fs;
 
-	if(total_records == 0) {
-		total_records = get_total_lines(infile);
-	} 
-	
-	unsigned long long lines_per_task = (unsigned long long)ceil((double)total_records/partitions); 
-	
-	char *executable_dup = strdup(executable);
+	unsigned long long lines_per_task = (unsigned long long)ceil((double)total_records_to_sort/partitions); 
 
-	if (strchr(executable, '/')) {
-		strcpy(remote_executable, basename(executable_dup));
-	} else {
-		strcpy(remote_executable, executable);
-	}
-	if (strchr(infile, '/')) {
-		strcpy(remote_infile, basename(infile));
-	} else {
-		strcpy(remote_infile, infile);
-	}
+	char *infile_dup = strdup(infile);
+	strcpy(remote_infile, basename(infile_dup));
+	free(infile_dup);
 
-	free(executable_dup);
-	
 	infile_fs = fopen(infile, "r");
 	if (infile_fs == NULL) {
 		printf ("Opening %s file failed: %s!\n", infile, strerror(errno)); 
 		return 0;	
 	}	
-	while(task_end_line < total_records) {
+	
+	while(task_end_line < total_records_to_sort) {
 		//we partition input into pieces by tracking the file offset of the lines in it.
-		prev_file_offset_end = file_offset_end;	
-		lines_to_submit = (total_records - task_end_line) < lines_per_task ? (total_records - task_end_line) : lines_per_task;	
+		lines_to_submit = (total_records_to_sort - task_end_line) < lines_per_task ? (total_records_to_sort - task_end_line) : lines_per_task;	
 		task_end_line += lines_to_submit;
-		file_offset_end = get_file_line_end_offset(infile_fs, prev_file_offset_end+1, lines_to_submit);		
+		file_offset_end = get_file_line_end_offset(infile_fs, file_offset_start, lines_to_submit);		
 		if (file_offset_end < 0) {
 			printf ("End file offset for line %llu is:%ld\n", task_end_line, file_offset_end);
 			return 0;	
-		}	
+		}
 		//create and submit tasks for sorting the pieces.
 		sprintf(outfile, "%s.%d", outfile_prefix, task_count);
 		if (executable_args){	
@@ -136,9 +121,10 @@ int partition_submit_tasks(struct work_queue *q, char *executable, char *executa
 			sprintf(command, "./%s %s > %s", executable, remote_infile, outfile);
 		}
 
-		submit_task(q, command, executable, infile, prev_file_offset_end+1, file_offset_end, outfile);
+		submit_task(q, command, executable, infile, file_offset_start, file_offset_end, outfile);
 	
 		task_count++;
+		file_offset_start = file_offset_end + 1;
 	}
 	
 	fclose(infile_fs);	
@@ -148,13 +134,16 @@ int partition_submit_tasks(struct work_queue *q, char *executable, char *executa
 int submit_task(struct work_queue *q, char *command, char *executable, char *infile, off_t infile_offset_start, off_t infile_offset_end, char *outfile) {
 	struct work_queue_task *t;
 	int taskid;
-	
+
+	char *infile_dup = strdup(infile); //basename() modifies its arguments. So we need to pass a duplicate.
+	char *executable_dup = strdup(executable);
+
 	t = work_queue_task_create(command);
-	if (!work_queue_task_specify_file_piece(t, infile, basename(infile), infile_offset_start, infile_offset_end, WORK_QUEUE_INPUT, WORK_QUEUE_NOCACHE)) {
+	if (!work_queue_task_specify_file_piece(t, infile, basename(infile_dup), infile_offset_start, infile_offset_end, WORK_QUEUE_INPUT, WORK_QUEUE_NOCACHE)) {
 		printf("task_specify_file_piece() failed for %s: remote filename %s, start offset %ld, end offset %ld.\n", infile, basename(infile), infile_offset_start, infile_offset_end);
 		return 0;	
 	}
-	if (!work_queue_task_specify_file(t, executable, basename(executable), WORK_QUEUE_INPUT, WORK_QUEUE_CACHE)) {
+	if (!work_queue_task_specify_file(t, executable, basename(executable_dup), WORK_QUEUE_INPUT, WORK_QUEUE_CACHE)) {
 		printf("task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", executable);
 		return 0;	
 	}
@@ -165,6 +154,9 @@ int submit_task(struct work_queue *q, char *command, char *executable, char *inf
 
 	taskid = work_queue_submit(q, t);
 	printf("submitted task (id# %d): %s\n", taskid, t->command_line);
+
+	free(infile_dup);
+	free(executable_dup);
 
 	return taskid;
 }
@@ -458,6 +450,7 @@ int main(int argc, char *argv[])
 	int number_tasks = 0;
 	char *infile_temp = NULL;
 	int i;
+	int records;	
 	int optimal_partitions;
 	int optimal_resources; 
 	int current_optimal_partitions;
@@ -465,15 +458,10 @@ int main(int argc, char *argv[])
 	double optimal_times[5];
 
 	sprintf(sort_executable, "%s", argv[optind]);
-		
 	sprintf(infile, "%s", argv[optind+1]);
 
 	infile_temp = strdup(infile);		
-	if (strchr(infile, '/')) {
-		strcpy(outfile_prefix, basename(infile_temp));
-	} else {
-		strcpy(outfile_prefix, infile_temp);
-	}
+	strcpy(outfile_prefix, basename(infile_temp));
 	sprintf(outfile_prefix, "%s.sorted", outfile_prefix);
 	free(infile_temp);
 
@@ -539,7 +527,12 @@ int main(int argc, char *argv[])
 	free((void *)proj_name);
 
 	printf("%s will be run to sort contents of %s\n", sort_executable, infile);
-	
+
+	if(total_records == 0) {
+		total_records = get_total_lines(infile);
+	} 
+	records = total_records;
+
 	if(sample_env) {
 		//Reset the coefficients to 0 so we use the empirically determined values from sampling the execution environment.
 		partition_overhead_coefficient_a = 0;
@@ -552,7 +545,7 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	part_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	number_tasks = partition_submit_tasks(q, sort_executable, sort_arguments, infile, outfile_prefix);
+	number_tasks = partition_submit_tasks(q, sort_executable, sort_arguments, infile, 0, outfile_prefix, records);
     	
 	gettimeofday(&current, 0);
 	part_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
