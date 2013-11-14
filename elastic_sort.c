@@ -29,6 +29,7 @@
 //Defaults
 #define PARTITION_DEFAULT 20
 #define BW_DEFAULT 100 //BW in Mbps
+#define SAMPLE_SIZE_DEFAULT 2 
 
 #define PARTITION_COEFF_A_DEFAULT 175
 #define MERGE_COEFF_A_DEFAULT 10
@@ -388,8 +389,6 @@ int main(int argc, char *argv[])
 	int port = 9000;
 	int c;
 
-	int bandwidth = BW_DEFAULT; 
-	
 	char *sort_arguments = NULL;
 	const char *proj_name = NULL;
 	char *outfile= NULL;
@@ -402,6 +401,7 @@ int main(int argc, char *argv[])
 	int keepalive_interval = 300;
 	int keepalive_timeout = 30;
 
+	int bandwidth = BW_DEFAULT; 
 	int partitions = PARTITION_DEFAULT;
 
 	gettimeofday(&current, 0);
@@ -467,6 +467,7 @@ int main(int argc, char *argv[])
 	int optimal_partitions, optimal_resources, current_optimal_partitions;
 	double current_optimal_time = DBL_MAX;
 	double optimal_times[5];
+	int sample_partition_offset_end = 0;	
 	int i;
 
 	sprintf(sort_executable, "%s", argv[optind]);
@@ -474,7 +475,7 @@ int main(int argc, char *argv[])
 
 	if(!outfile){
 		char *infile_dup = strdup(infile);		
-		outfile = (char *) malloc((strlen(infile)+1)*sizeof(char));
+		outfile = (char *) malloc((strlen(infile)+8)*sizeof(char));
 		sprintf(outfile, "%s.sorted", basename(infile_dup));
 		free(infile_dup);
 	}
@@ -536,7 +537,6 @@ int main(int argc, char *argv[])
 	}
 	work_queue_specify_keepalive_interval(q, keepalive_interval);
 	work_queue_specify_keepalive_timeout(q, keepalive_timeout);
-	//work_queue_activate_fast_abort(q, 2.5);
 
 	free((void *)proj_name);
 
@@ -548,18 +548,31 @@ int main(int argc, char *argv[])
 	records = total_records;
 
 	if(sample_env) {
-		//Reset the coefficients to 0 so we use the empirically determined values from sampling the execution environment.
-		partition_overhead_coefficient_a = 0;
-		merge_overhead_coefficient_a = 0;
-		merge_overhead_coefficient_b = 0;
-		per_record_execution_time = 0;
+		printf("Sampling the execution environment with %d partitions!\n", SAMPLE_SIZE_DEFAULT);
+		int sample_record_size = (5*records)/100; //sample size is 5% of the total records
+		char *sample_partition_file_prefix = (char *) malloc((strlen(outfile)+8) * sizeof(char));
+		sprintf(sample_partition_file_prefix, "%s.sample", outfile);
+		sample_partition_offset_end = partition_tasks(q, sort_executable, sort_arguments, infile, 0, sample_partition_file_prefix, SAMPLE_SIZE_DEFAULT, sample_record_size);	
+		while(!work_queue_empty(q)) {
+			t = work_queue_wait(q, 5);
+			if(t) {
+				printf("Task (taskid# %d) complete: %s (return code %d)\n", t->taskid, t->command_line, t->return_status);
+				printf("Task execution time: %llu\n", (long long unsigned) t->cmd_execution_time);
+				work_queue_task_delete(t);
+			}
+		}
+		char *sample_outfile = (char *) malloc((strlen(outfile)+3) * sizeof(char));
+		sprintf(sample_outfile, "%s.0", outfile);
+		merge_sorted_outputs(sample_outfile, sample_partition_file_prefix, SAMPLE_SIZE_DEFAULT);	
+		records = total_records - sample_record_size;
+		created_partitions = 1;	
 	}
 
 	long long unsigned int part_start_time, part_end_time, part_time;
 	gettimeofday(&current, 0);
 	part_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	last_partition_offset_end = partition_tasks(q, sort_executable, sort_arguments, infile, 0, outfile, partitions, records);
+	last_partition_offset_end = partition_tasks(q, sort_executable, sort_arguments, infile, 0+sample_partition_offset_end, outfile, partitions, records);
     	
 	gettimeofday(&current, 0);
 	part_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
@@ -597,7 +610,7 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	merge_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	merge_sorted_outputs(outfile, outfile, partitions);	
+	merge_sorted_outputs(outfile, outfile, created_partitions);	
 	
 	gettimeofday(&current, 0);
 	merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
