@@ -252,23 +252,41 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	return 1;
 }
 
-// Sample the execution environment.
-off_t sample_run(struct work_queue *q, const char *executable, const char *executable_args, const char *infile, int infile_offset_start, const char *partition_file_prefix, const char *outfile, int partitions, int records_to_sort) {
-	
+void wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_file) {
 	struct work_queue_task *t;	
-	printf("Sampling the execution environment with %d partitions!\n", SAMPLE_SIZE_DEFAULT);
-	
-	off_t partition_offset_end = partition_tasks(q, executable, executable_args, infile, infile_offset_start, partition_file_prefix, partitions, records_to_sort);	
-	
+	FILE *task_times_fp;
+
+	if(task_times_file) {
+		task_times_fp = fopen("elastic_sort.tasktimes", "w");
+		if (!task_times_fp) {
+        	printf("Opening of elastic_sort.tasktimes file failed!\n");
+    	}
+	}
+
 	while(!work_queue_empty(q)) {
-		t = work_queue_wait(q, 5);
+		t = work_queue_wait(q, timeout);
 		if(t) {
 			printf("Task (taskid# %d) complete: %s (return code %d)\n", t->taskid, t->command_line, t->return_status);
 			printf("Task execution time: %llu\n", (long long unsigned) t->cmd_execution_time);
+			if(task_times_fp) {
+				fprintf(task_times_fp, "%d: %llu\n", t->taskid, (long long unsigned) t->cmd_execution_time);	
+			}	
 			work_queue_task_delete(t);
 		}
 	}
 	
+	fclose(task_times_fp);
+}	
+
+// Sample the execution environment.
+off_t sample_run(struct work_queue *q, const char *executable, const char *executable_args, const char *infile, int infile_offset_start, const char *partition_file_prefix, const char *outfile, int partitions, int records_to_sort) {
+	
+	printf("Sampling the execution environment with %d partitions!\n", SAMPLE_SIZE_DEFAULT);
+	
+	off_t partition_offset_end = partition_tasks(q, executable, executable_args, infile, infile_offset_start, partition_file_prefix, partitions, records_to_sort);	
+	
+	wait_partition_tasks(q, 5, NULL);
+
 	merge_sorted_outputs(outfile, partition_file_prefix, SAMPLE_SIZE_DEFAULT);	
 	
 	created_partitions = 1;	
@@ -484,7 +502,6 @@ int main(int argc, char *argv[])
 	}
 
 	char sort_executable[256], infile[256]; 
-	struct work_queue_task *t;	
 	off_t last_partition_offset_end = 0;
 	int records;	
 	int optimal_partitions, optimal_resources, current_optimal_partitions;
@@ -600,26 +617,16 @@ int main(int argc, char *argv[])
 	
 	free(sort_arguments);
 
-	FILE *task_file = fopen("wq_sort.tasktimes", "w");
-   	if (!task_file) {
-        	printf("Opening of wq_sort.tasktimes file failed!\n");
-        	return 1;
-    	}
-	
 	printf("Waiting for tasks to complete...\n");
 	long long unsigned int parallel_start_time, parallel_end_time, parallel_time;
 	gettimeofday(&current, 0);
 	parallel_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-	while(!work_queue_empty(q)) {
-		t = work_queue_wait(q, 5);
-		if(t) {
-			printf("Task (taskid# %d) complete: %s (return code %d)\n", t->taskid, t->command_line, t->return_status);
-			fprintf(task_file, "%d: %llu\n", t->taskid, (long long unsigned) t->cmd_execution_time);	
-			work_queue_task_delete(t);
-		}
-	}
-	fclose(task_file);
-	
+
+	char *record_task_times_file = (char *)malloc((strlen(outfile)+11) * sizeof(char));
+	sprintf(record_task_times_file, "%s.tasktimes", outfile);	
+	wait_partition_tasks(q, 5, record_task_times_file);	
+	free(record_task_times_file);
+
 	gettimeofday(&current, 0);
 	parallel_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 	parallel_time = parallel_end_time - parallel_start_time;
