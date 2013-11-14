@@ -41,6 +41,8 @@ double partition_overhead_coefficient_a = PARTITION_COEFF_A_DEFAULT;
 double merge_overhead_coefficient_a = MERGE_COEFF_A_DEFAULT;
 double merge_overhead_coefficient_b = MERGE_COEFF_B_DEFAULT;
 double per_record_execution_time = PER_RECORD_SORT_TIME_DEFAULT;
+	
+static int created_partitions = 0;	
 
 unsigned long long get_total_lines(char *infile) {
 	FILE *input_file = fopen(infile, "r");
@@ -79,7 +81,7 @@ off_t get_file_line_end_offset(FILE *fp, off_t start_offset, unsigned long long 
 	return (end_offset-2); //subtract two to rewind back to newline at end of line	
 }
 
-int submit_task(struct work_queue *q, char *command, char *executable, char *infile, off_t infile_offset_start, off_t infile_offset_end, char *outfile) {
+int submit_task(struct work_queue *q, const char *command, const char *executable, const char *infile, off_t infile_offset_start, off_t infile_offset_end, const char *outfile) {
 	struct work_queue_task *t;
 	int taskid;
 
@@ -88,7 +90,7 @@ int submit_task(struct work_queue *q, char *command, char *executable, char *inf
 
 	t = work_queue_task_create(command);
 	if (!work_queue_task_specify_file_piece(t, infile, basename(infile_dup), infile_offset_start, infile_offset_end, WORK_QUEUE_INPUT, WORK_QUEUE_NOCACHE)) {
-		printf("task_specify_file_piece() failed for %s: remote filename %s, start offset %ld, end offset %ld.\n", infile, basename(infile), infile_offset_start, infile_offset_end);
+		printf("task_specify_file_piece() failed for %s: start offset %ld, end offset %ld.\n", infile, infile_offset_start, infile_offset_end);
 		return 0;	
 	}
 	if (!work_queue_task_specify_file(t, executable, basename(executable_dup), WORK_QUEUE_INPUT, WORK_QUEUE_CACHE)) {
@@ -112,9 +114,8 @@ int submit_task(struct work_queue *q, char *command, char *executable, char *inf
 /* Partition the input file according to the number of partitions specified and
  * create tasks that sort each of these partitions.
  */
-off_t partition_tasks(struct work_queue *q, char *executable, char *executable_args, char *infile, int infile_offset_start, char *outfile_prefix, int partitions, int records_to_sort) {
+off_t partition_tasks(struct work_queue *q, const char *executable, const char *executable_args, const char *infile, int infile_offset_start, const char *outfile_prefix, int partitions, int records_to_sort) {
 	char outfile[256], remote_infile[256], command[256];
-	int task_count = 0;	
 	
 	off_t file_offset_start = infile_offset_start;
 	off_t file_offset_end;
@@ -143,8 +144,9 @@ off_t partition_tasks(struct work_queue *q, char *executable, char *executable_a
 			printf ("End file offset for line %llu is:%ld\n", task_end_line, file_offset_end);
 			return 0;	
 		}
+		
 		//create and submit tasks for sorting the pieces.
-		sprintf(outfile, "%s.%d", outfile_prefix, task_count);
+		sprintf(outfile, "%s.%d", outfile_prefix, created_partitions);
 		if (executable_args){	
 			sprintf(command, "./%s %s %s > %s", executable, executable_args, remote_infile, outfile);
 		} else {
@@ -154,7 +156,7 @@ off_t partition_tasks(struct work_queue *q, char *executable, char *executable_a
 		if(!submit_task(q, command, executable, infile, file_offset_start, file_offset_end, outfile))
 			return 0;
 
-		task_count++;
+		created_partitions++;
 		file_offset_start = file_offset_end + 1;
 	}
 	
@@ -190,60 +192,61 @@ int find_min(int *vals, int length, int *min_pos) {
 }
 
 // Do k-way merge of the sorted outputs returned by tasks. 
-int merge_sorted_outputs(char *outfile_prefix, int number_files) {
-	char outfile[256], merged_output_file[256];
-	int *outfile_line_vals;	
-	FILE **outfile_ptrs;
-	FILE *merged_output_fp;
+int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix, int partitions) {
+	FILE *outfile_fp;
+	
+	char partition_file[256];
+	FILE **partition_file_fps;
+	int *partition_file_line_vals;	
+	
 	int min_pos, min_value;
-	int processed_output_files = 0;
+	int merged_partitions = 0;
 	int i;	
 
-	sprintf(merged_output_file, "%s", outfile_prefix);	
-	merged_output_fp = fopen(merged_output_file, "w");
-	if(!merged_output_fp) {
-		fprintf(stderr, "Opening file %s failed: %s!\n", merged_output_file, strerror(errno));
+	outfile_fp = fopen(outfile, "w");
+	if(!outfile_fp) {
+		fprintf(stderr, "Opening file %s failed: %s!\n", outfile, strerror(errno));
 		return -1;	
 	}	
 	
-	outfile_line_vals = malloc(sizeof(int) * number_files);
-	outfile_ptrs = malloc(sizeof(FILE *) * number_files);
+	partition_file_line_vals = malloc(sizeof(int) * partitions);
+	partition_file_fps = malloc(sizeof(FILE *) * partitions);
 
-	for(i = 0; i < number_files; i++) {
-		sprintf(outfile, "%s.%d", outfile_prefix, i);	
-		outfile_ptrs[i] = fopen(outfile, "r");
-		if(!outfile_ptrs[i]) {
-			fprintf(stderr, "Opening file %s failed: %s!\n", outfile, strerror(errno));
+	for(i = 0; i < partitions; i++) {
+		sprintf(partition_file, "%s.%d", partition_file_prefix, i);	
+		partition_file_fps[i] = fopen(partition_file, "r");
+		if(!partition_file_fps[i]) {
+			fprintf(stderr, "Opening file %s failed: %s!\n", partition_file, strerror(errno));
 			goto cleanup;	
 			return -1;	
 		}
 	}
 
 	//read the first lines of each output file into the array
-	for(i = 0; i < number_files; i++) {
-		outfile_line_vals[i] = get_file_line_value(outfile_ptrs[i]);
+	for(i = 0; i < partitions; i++) {
+		partition_file_line_vals[i] = get_file_line_value(partition_file_fps[i]);
 	}
 
 	//compute the minimum of array and load a new value from the contributing
 	//file into the array index of the minimum.
-	while (processed_output_files < number_files) {
-		min_value = find_min(outfile_line_vals, number_files, &min_pos);
-		fprintf(merged_output_fp, "%d\n", min_value); //write current min value to merged output file
-		outfile_line_vals[min_pos] = get_file_line_value(outfile_ptrs[min_pos]);
-		if (outfile_line_vals[min_pos] < 0) {	
-			processed_output_files++;	
+	while (merged_partitions < partitions) {
+		min_value = find_min(partition_file_line_vals, partitions, &min_pos);
+		fprintf(outfile_fp, "%d\n", min_value); //write current min value to output file
+		partition_file_line_vals[min_pos] = get_file_line_value(partition_file_fps[min_pos]);
+		if (partition_file_line_vals[min_pos] < 0) {	
+			merged_partitions++;	
 		}
 	}
 
   cleanup:
-	for(i = 0; i < number_files; i++) {
-		fclose(outfile_ptrs[i]);
-		sprintf(outfile, "%s.%d", outfile_prefix, i);	
-		unlink(outfile);	
+	for(i = 0; i < partitions; i++) {
+		fclose(partition_file_fps[i]);
+		sprintf(partition_file, "%s.%d", partition_file_prefix, i);	
+		unlink(partition_file);	
 	}
-	free(outfile_line_vals);	
-	free(outfile_ptrs);	
-	fclose(merged_output_fp);	
+	free(partition_file_line_vals);	
+	free(partition_file_fps);	
+	fclose(outfile_fp);	
 	
 	return 1;
 }
@@ -586,7 +589,7 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	merge_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	merge_sorted_outputs(outfile_prefix, partitions);	
+	merge_sorted_outputs(outfile_prefix, outfile_prefix, partitions);	
 	
 	gettimeofday(&current, 0);
 	merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
