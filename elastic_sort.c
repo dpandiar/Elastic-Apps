@@ -252,6 +252,29 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	return 1;
 }
 
+// Sample the execution environment.
+off_t sample_run(struct work_queue *q, const char *executable, const char *executable_args, const char *infile, int infile_offset_start, const char *partition_file_prefix, const char *outfile, int partitions, int records_to_sort) {
+	
+	struct work_queue_task *t;	
+	printf("Sampling the execution environment with %d partitions!\n", SAMPLE_SIZE_DEFAULT);
+	
+	off_t partition_offset_end = partition_tasks(q, executable, executable_args, infile, infile_offset_start, partition_file_prefix, partitions, records_to_sort);	
+	
+	while(!work_queue_empty(q)) {
+		t = work_queue_wait(q, 5);
+		if(t) {
+			printf("Task (taskid# %d) complete: %s (return code %d)\n", t->taskid, t->command_line, t->return_status);
+			printf("Task execution time: %llu\n", (long long unsigned) t->cmd_execution_time);
+			work_queue_task_delete(t);
+		}
+	}
+	
+	merge_sorted_outputs(outfile, partition_file_prefix, SAMPLE_SIZE_DEFAULT);	
+	
+	created_partitions = 1;	
+	return partition_offset_end;
+}
+
 double get_partition_coefficient(char *input_file) {
 	
 	//Sample the time to partition to empirically compute the partition coefficient 'a' in the model.
@@ -548,24 +571,20 @@ int main(int argc, char *argv[])
 	records = total_records;
 
 	if(sample_env) {
-		printf("Sampling the execution environment with %d partitions!\n", SAMPLE_SIZE_DEFAULT);
 		int sample_record_size = (5*records)/100; //sample size is 5% of the total records
+		
 		char *sample_partition_file_prefix = (char *) malloc((strlen(outfile)+8) * sizeof(char));
 		sprintf(sample_partition_file_prefix, "%s.sample", outfile);
-		sample_partition_offset_end = partition_tasks(q, sort_executable, sort_arguments, infile, 0, sample_partition_file_prefix, SAMPLE_SIZE_DEFAULT, sample_record_size);	
-		while(!work_queue_empty(q)) {
-			t = work_queue_wait(q, 5);
-			if(t) {
-				printf("Task (taskid# %d) complete: %s (return code %d)\n", t->taskid, t->command_line, t->return_status);
-				printf("Task execution time: %llu\n", (long long unsigned) t->cmd_execution_time);
-				work_queue_task_delete(t);
-			}
-		}
+		
 		char *sample_outfile = (char *) malloc((strlen(outfile)+3) * sizeof(char));
 		sprintf(sample_outfile, "%s.0", outfile);
-		merge_sorted_outputs(sample_outfile, sample_partition_file_prefix, SAMPLE_SIZE_DEFAULT);	
+		
+		sample_partition_offset_end = sample_run(q, sort_executable, sort_arguments, infile, 0, sample_partition_file_prefix, sample_outfile, SAMPLE_SIZE_DEFAULT, sample_record_size);	
+		
 		records = total_records - sample_record_size;
-		created_partitions = 1;	
+		
+		free(sample_partition_file_prefix);
+		free(sample_outfile);
 	}
 
 	long long unsigned int part_start_time, part_end_time, part_time;
