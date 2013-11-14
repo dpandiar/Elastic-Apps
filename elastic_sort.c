@@ -360,10 +360,11 @@ int print_optimal_runtimes(char *input_file, char *executable, int bandwidth, in
 }
 
 static void show_help(const char *cmd) {
-    fprintf(stdout, "Use: %s [options] <sort program> <file 1>\n", cmd);
+    fprintf(stdout, "Use: %s [options] <sort program> <infile>\n", cmd);
 	fprintf(stdout, "where options are:\n");
 	fprintf(stdout, " %-30s Specify a project name for the Work Queue master. (default = none)\n", "-N <string>");
 	fprintf(stdout, " %-30s Specify the number of partitions to create of the input data. (default = 20)\n", "-k <int>");
+	fprintf(stdout, " %-30s Specify the output file name for the sorted records. (default = <infile>.sorted)\n", "-o <string>");
 	fprintf(stdout, " %-30s Automatically determine the optimal partition size. (default = 20)\n", "-A <int>");
 	fprintf(stdout, " %-30s Empirically estimate the model coefficients by sampling the execution environment. (default = off)\n", "-S <int>");
 	fprintf(stdout, " %-30s Specify the arguments for the sort program.\n", "-p <string>");
@@ -386,6 +387,7 @@ int main(int argc, char *argv[])
 	
 	char *sort_arguments = NULL;
 	const char *proj_name = NULL;
+	char *outfile= NULL;
 	int auto_partition = 0;	
 	int sample_env = 0;	
 	int print_runtime_estimates = 0;
@@ -406,13 +408,16 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 		
-	while((c = getopt(argc, argv, "N:k:ASp:MR:L:I:T:B:h")) != (char) -1) {
+	while((c = getopt(argc, argv, "N:k:o:ASp:MR:L:I:T:B:h")) != (char) -1) {
 		switch (c) {
 		case 'N':
 			proj_name = strdup(optarg);
 			break;
 		case 'k':
 			partitions = atoi(optarg);
+			break;
+		case 'o':
+			outfile = strdup(optarg);
 			break;
 		case 'A':
 			auto_partition = 1;
@@ -450,26 +455,24 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	char sort_executable[256]; 
-	char infile[256], outfile_prefix[256]; 
+	char sort_executable[256], infile[256]; 
 	struct work_queue_task *t;	
 	off_t last_partition_offset_end = 0;
-	char *infile_temp = NULL;
-	int i;
 	int records;	
-	int optimal_partitions;
-	int optimal_resources; 
-	int current_optimal_partitions;
+	int optimal_partitions, optimal_resources, current_optimal_partitions;
 	double current_optimal_time = DBL_MAX;
 	double optimal_times[5];
+	int i;
 
 	sprintf(sort_executable, "%s", argv[optind]);
 	sprintf(infile, "%s", argv[optind+1]);
 
-	infile_temp = strdup(infile);		
-	strcpy(outfile_prefix, basename(infile_temp));
-	sprintf(outfile_prefix, "%s.sorted", outfile_prefix);
-	free(infile_temp);
+	if(!outfile){
+		char *infile_dup = strdup(infile);		
+		outfile = (char *) malloc((strlen(infile)+1)*sizeof(char));
+		sprintf(outfile, "%s.sorted", basename(infile_dup));
+		free(infile_dup);
+	}
 
 	if(estimate_partition) {
 		double *estimated_runtimes = (double *)malloc(sizeof(double) * 5); 
@@ -551,7 +554,7 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	part_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	last_partition_offset_end = partition_tasks(q, sort_executable, sort_arguments, infile, 0, outfile_prefix, partitions, records);
+	last_partition_offset_end = partition_tasks(q, sort_executable, sort_arguments, infile, 0, outfile, partitions, records);
     	
 	gettimeofday(&current, 0);
 	part_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
@@ -589,14 +592,14 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	merge_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	merge_sorted_outputs(outfile_prefix, outfile_prefix, partitions);	
+	merge_sorted_outputs(outfile, outfile, partitions);	
 	
 	gettimeofday(&current, 0);
 	merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 	merge_time = merge_end_time - merge_start_time;
 	printf("Merge time is %llu\n", merge_time);
 	
-	printf("Sorting complete. Output is at: %s!\n", outfile_prefix);
+	printf("Sorting complete. Output is at: %s!\n", outfile);
 
 	execn_time = merge_end_time - execn_start_time;
 	printf("Execn time is %llu\n", execn_time);
@@ -611,5 +614,7 @@ int main(int argc, char *argv[])
 	fclose(time_file);
 
 	work_queue_delete(q);
+	
+	free(outfile);
 	return 0;
 }
