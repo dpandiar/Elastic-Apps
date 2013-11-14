@@ -287,6 +287,11 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	
 	struct stat stat_buf;
 
+	//resources that exceed the number of tasks aren't going to be used. 
+	if(resources > tasks) {
+		resources = tasks;
+	}
+
 	if(!stat(input_file, &stat_buf)){
 		record_bytes = stat_buf.st_size;
 	}
