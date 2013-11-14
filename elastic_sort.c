@@ -27,15 +27,15 @@
 #define LINE_SIZE 2048
 
 //Defaults
-#define BW_DEFAULT 100 //BW in Mbps
 #define PARTITION_DEFAULT 20
+#define BW_DEFAULT 100 //BW in Mbps
+
 #define PARTITION_COEFF_A_DEFAULT 175
 #define MERGE_COEFF_A_DEFAULT 10
 #define MERGE_COEFF_B_DEFAULT 380
 #define PER_RECORD_SORT_TIME_DEFAULT 0.000003
 
 static unsigned long long total_records = 0;
-static int partitions = PARTITION_DEFAULT;
 
 double partition_overhead_coefficient_a = PARTITION_COEFF_A_DEFAULT;
 double merge_overhead_coefficient_a = MERGE_COEFF_A_DEFAULT;
@@ -79,58 +79,6 @@ off_t get_file_line_end_offset(FILE *fp, off_t start_offset, unsigned long long 
 	return (end_offset-2); //subtract two to rewind back to newline at end of line	
 }
 
-/* Partition the input file according to the number of partitions specified and
- * create tasks that sort each of these partitions.
- */
-int partition_submit_tasks(struct work_queue *q, char *executable, char *executable_args, char *infile, int infile_offset_start, char *outfile_prefix, int total_records_to_sort) {
-	char outfile[256], remote_infile[256], command[256];
-	int task_count = 0;	
-	
-	off_t file_offset_start = infile_offset_start;
-	off_t file_offset_end;
-	unsigned long long task_end_line = 0;
-	unsigned long long lines_to_submit;
-	FILE *infile_fs;
-
-	unsigned long long lines_per_task = (unsigned long long)ceil((double)total_records_to_sort/partitions); 
-
-	char *infile_dup = strdup(infile);
-	strcpy(remote_infile, basename(infile_dup));
-	free(infile_dup);
-
-	infile_fs = fopen(infile, "r");
-	if (infile_fs == NULL) {
-		printf ("Opening %s file failed: %s!\n", infile, strerror(errno)); 
-		return 0;	
-	}	
-	
-	while(task_end_line < total_records_to_sort) {
-		//we partition input into pieces by tracking the file offset of the lines in it.
-		lines_to_submit = (total_records_to_sort - task_end_line) < lines_per_task ? (total_records_to_sort - task_end_line) : lines_per_task;	
-		task_end_line += lines_to_submit;
-		file_offset_end = get_file_line_end_offset(infile_fs, file_offset_start, lines_to_submit);		
-		if (file_offset_end < 0) {
-			printf ("End file offset for line %llu is:%ld\n", task_end_line, file_offset_end);
-			return 0;	
-		}
-		//create and submit tasks for sorting the pieces.
-		sprintf(outfile, "%s.%d", outfile_prefix, task_count);
-		if (executable_args){	
-			sprintf(command, "./%s %s %s > %s", executable, executable_args, remote_infile, outfile);
-		} else {
-			sprintf(command, "./%s %s > %s", executable, remote_infile, outfile);
-		}
-
-		submit_task(q, command, executable, infile, file_offset_start, file_offset_end, outfile);
-	
-		task_count++;
-		file_offset_start = file_offset_end + 1;
-	}
-	
-	fclose(infile_fs);	
-	return task_count;
-}
-
 int submit_task(struct work_queue *q, char *command, char *executable, char *infile, off_t infile_offset_start, off_t infile_offset_end, char *outfile) {
 	struct work_queue_task *t;
 	int taskid;
@@ -159,6 +107,59 @@ int submit_task(struct work_queue *q, char *command, char *executable, char *inf
 	free(executable_dup);
 
 	return taskid;
+}
+
+/* Partition the input file according to the number of partitions specified and
+ * create tasks that sort each of these partitions.
+ */
+off_t partition_tasks(struct work_queue *q, char *executable, char *executable_args, char *infile, int infile_offset_start, char *outfile_prefix, int partitions, int records_to_sort) {
+	char outfile[256], remote_infile[256], command[256];
+	int task_count = 0;	
+	
+	off_t file_offset_start = infile_offset_start;
+	off_t file_offset_end;
+	unsigned long long task_end_line = 0;
+	unsigned long long lines_to_submit;
+	FILE *infile_fs;
+
+	unsigned long long lines_per_task = (unsigned long long)ceil((double)records_to_sort/partitions); 
+
+	char *infile_dup = strdup(infile);
+	strcpy(remote_infile, basename(infile_dup));
+	free(infile_dup);
+
+	infile_fs = fopen(infile, "r");
+	if (infile_fs == NULL) {
+		printf ("Opening %s file failed: %s!\n", infile, strerror(errno)); 
+		return 0;	
+	}	
+	
+	while(task_end_line < records_to_sort) {
+		//we partition input into pieces by tracking the file offset of the lines in it.
+		lines_to_submit = (records_to_sort - task_end_line) < lines_per_task ? (records_to_sort - task_end_line) : lines_per_task;	
+		task_end_line += lines_to_submit;
+		file_offset_end = get_file_line_end_offset(infile_fs, file_offset_start, lines_to_submit);		
+		if (file_offset_end < 0) {
+			printf ("End file offset for line %llu is:%ld\n", task_end_line, file_offset_end);
+			return 0;	
+		}
+		//create and submit tasks for sorting the pieces.
+		sprintf(outfile, "%s.%d", outfile_prefix, task_count);
+		if (executable_args){	
+			sprintf(command, "./%s %s %s > %s", executable, executable_args, remote_infile, outfile);
+		} else {
+			sprintf(command, "./%s %s > %s", executable, remote_infile, outfile);
+		}
+
+		if(!submit_task(q, command, executable, infile, file_offset_start, file_offset_end, outfile))
+			return 0;
+
+		task_count++;
+		file_offset_start = file_offset_end + 1;
+	}
+	
+	fclose(infile_fs);	
+	return file_offset_start;
 }
 
 int get_file_line_value(FILE *fp) {
@@ -237,6 +238,8 @@ int merge_sorted_outputs(char *outfile_prefix, int number_files) {
   cleanup:
 	for(i = 0; i < number_files; i++) {
 		fclose(outfile_ptrs[i]);
+		sprintf(outfile, "%s.%d", outfile_prefix, i);	
+		unlink(outfile);	
 	}
 	free(outfile_line_vals);	
 	free(outfile_ptrs);	
@@ -301,7 +304,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	parallel_execution_time = (total_records * per_record_execution_time) / tasks;	
 	parallel_execution_time *= ceil((double)tasks/(double)resources);
 	
-	/* Model of partition is based on the partitioning done in partition_submit_tasks():
+	/* Model of partition is based on the partitioning done in partition_tasks():
 	 * Its asymptotic runtime is O(n) where n is number of records in billions and m is number of partitions.
 	 * Its actual runtime is modeled as: (a*n). The values of a and b are found by sampling.
 	 */	
@@ -335,8 +338,6 @@ int print_optimal_runtimes(char *input_file, char *executable, int bandwidth, in
 	double *estimated_times;
 	double optimal_execution_time = -1;
 	double execution_time = -1;
-	double merge_time = -1;
-	double partition_time = -1;
 	int optimal_partitions;
 	int i;
 	for (i = 1; i <= 5*resources; i++) { 	
@@ -390,6 +391,8 @@ int main(int argc, char *argv[])
 	long long unsigned int execn_start_time, execn_time;
 	int keepalive_interval = 300;
 	int keepalive_timeout = 30;
+
+	int partitions = PARTITION_DEFAULT;
 
 	gettimeofday(&current, 0);
 	execn_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
@@ -447,7 +450,7 @@ int main(int argc, char *argv[])
 	char sort_executable[256]; 
 	char infile[256], outfile_prefix[256]; 
 	struct work_queue_task *t;	
-	int number_tasks = 0;
+	off_t last_partition_offset_end = 0;
 	char *infile_temp = NULL;
 	int i;
 	int records;	
@@ -545,7 +548,7 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	part_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	number_tasks = partition_submit_tasks(q, sort_executable, sort_arguments, infile, 0, outfile_prefix, records);
+	last_partition_offset_end = partition_tasks(q, sort_executable, sort_arguments, infile, 0, outfile_prefix, partitions, records);
     	
 	gettimeofday(&current, 0);
 	part_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
@@ -553,11 +556,6 @@ int main(int argc, char *argv[])
 	printf("Partition time is %llu\n", part_time);
 	
 	free(sort_arguments);
-	
-	if (number_tasks <= 0) {
-		printf("No tasks were submitted.\n");
-		return 1;
-	}
 
 	FILE *task_file = fopen("wq_sort.tasktimes", "w");
    	if (!task_file) {
@@ -588,7 +586,7 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	merge_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	merge_sorted_outputs(outfile_prefix, number_tasks);	
+	merge_sorted_outputs(outfile_prefix, partitions);	
 	
 	gettimeofday(&current, 0);
 	merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
