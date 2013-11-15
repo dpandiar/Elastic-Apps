@@ -123,7 +123,7 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 	unsigned long long task_end_line = 0;
 	unsigned long long lines_to_submit;
 	FILE *infile_fs;
-
+	
 	unsigned long long lines_per_task = (unsigned long long)ceil((double)records_to_sort/partitions); 
 
 	char *infile_dup = strdup(infile);
@@ -290,7 +290,7 @@ off_t sample_run(struct work_queue *q, const char *executable, const char *execu
 
 	merge_sorted_outputs(outfile, partition_file_prefix, SAMPLE_SIZE_DEFAULT);	
 	
-	created_partitions = 1;	
+	created_partitions = 1;	 //we merge the sample partitions to 1.
 	return partition_offset_end;
 }
 
