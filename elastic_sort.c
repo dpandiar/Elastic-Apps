@@ -275,7 +275,8 @@ void wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_fi
 		}
 	}
 	
-	fclose(task_times_fp);
+	if(task_times_fp)	
+		fclose(task_times_fp);
 }	
 
 // Sample the execution environment.
