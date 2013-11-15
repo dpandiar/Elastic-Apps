@@ -5,8 +5,8 @@
 */
 
 /* 
-  Distributed sort using Work Queue.
-*/
+ * Distributed sort using Work Queue.
+ */
 
 #include "debug.h"
 #include <work_queue.h>
@@ -31,19 +31,22 @@
 #define BW_DEFAULT 100 //BW in Mbps
 #define SAMPLE_SIZE_DEFAULT 2 
 
-#define PARTITION_COEFF_A_DEFAULT 175
-#define MERGE_COEFF_A_DEFAULT 10
-#define MERGE_COEFF_B_DEFAULT 380
+#define PARTITION_COEFF_A_DEFAULT 175 
+#define PARTITION_COEFF_B_DEFAULT 0.00005 
+#define MERGE_COEFF_A_DEFAULT 10  
+#define MERGE_COEFF_B_DEFAULT 375
 #define PER_RECORD_SORT_TIME_DEFAULT 0.000003
 
 static unsigned long long total_records = 0;
 
 double partition_overhead_coefficient_a = PARTITION_COEFF_A_DEFAULT;
+double partition_overhead_coefficient_b = PARTITION_COEFF_B_DEFAULT;
 double merge_overhead_coefficient_a = MERGE_COEFF_A_DEFAULT;
 double merge_overhead_coefficient_b = MERGE_COEFF_B_DEFAULT;
-double per_record_execution_time = PER_RECORD_SORT_TIME_DEFAULT;
+double per_record_sort_time = PER_RECORD_SORT_TIME_DEFAULT;
 	
 static int created_partitions = 0;	
+static int run_timing_code = 0;
 
 unsigned long long get_total_lines(char *infile) {
 	FILE *input_file = fopen(infile, "r");
@@ -115,7 +118,7 @@ int submit_task(struct work_queue *q, const char *command, const char *executabl
 /* Partition the input file according to the number of partitions specified and
  * create tasks that sort each of these partitions.
  */
-off_t partition_tasks(struct work_queue *q, const char *executable, const char *executable_args, const char *infile, int infile_offset_start, const char *outfile_prefix, int partitions, int records_to_sort) {
+off_t partition_tasks(struct work_queue *q, const char *executable, const char *executable_args, const char *infile, int infile_offset_start, const char *outfile_prefix, int partitions, long long records_to_partition) {
 	char outfile[256], remote_infile[256], command[256];
 	
 	off_t file_offset_start = infile_offset_start;
@@ -124,7 +127,18 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 	unsigned long long lines_to_submit;
 	FILE *infile_fs;
 	
-	unsigned long long lines_per_task = (unsigned long long)ceil((double)records_to_sort/partitions); 
+	struct timeval current;
+	long long unsigned int partition_start_time, partition_end_time; 
+	double partition_time_secs = 0; 
+	long long unsigned int task_submit_start_time, task_submit_end_time; 
+	double task_submit_time_secs = 0; 
+	
+	if(run_timing_code){
+		gettimeofday(&current, 0);
+		partition_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+	}
+
+	unsigned long long lines_per_task = (unsigned long long)ceil((double)records_to_partition/partitions); 
 
 	char *infile_dup = strdup(infile);
 	strcpy(remote_infile, basename(infile_dup));
@@ -136,9 +150,9 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 		return 0;	
 	}	
 	
-	while(task_end_line < records_to_sort) {
+	while(task_end_line < records_to_partition) {
 		//we partition input into pieces by tracking the file offset of the lines in it.
-		lines_to_submit = (records_to_sort - task_end_line) < lines_per_task ? (records_to_sort - task_end_line) : lines_per_task;	
+		lines_to_submit = (records_to_partition - task_end_line) < lines_per_task ? (records_to_partition - task_end_line) : lines_per_task;	
 		task_end_line += lines_to_submit;
 		file_offset_end = get_file_line_end_offset(infile_fs, file_offset_start, lines_to_submit);		
 		if (file_offset_end < 0) {
@@ -154,14 +168,42 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 			sprintf(command, "./%s %s > %s", executable, remote_infile, outfile);
 		}
 
+		if(run_timing_code) {
+			gettimeofday(&current, 0);
+			task_submit_start_time = partition_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+			partition_time_secs += (partition_end_time - partition_start_time) / 1000000.0;
+		}
+
 		if(!submit_task(q, command, executable, infile, file_offset_start, file_offset_end, outfile))
 			return 0;
+
+		if(run_timing_code) {
+			gettimeofday(&current, 0);
+			partition_start_time = task_submit_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+			task_submit_time_secs += (task_submit_end_time - task_submit_start_time) / 1000000.0;
+		}
 
 		created_partitions++;
 		file_offset_start = file_offset_end + 1;
 	}
 	
 	fclose(infile_fs);	
+	
+	if(run_timing_code){
+		gettimeofday(&current, 0);
+		partition_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+		partition_time_secs += (partition_end_time - partition_start_time) / 1000000.0;
+		fprintf(stderr, "Sample partition time is %f and task submission time is %f\n", partition_time_secs, task_submit_time_secs);
+	
+		fprintf(stderr, "Default partition coeff A: %f\n", partition_overhead_coefficient_a);
+		partition_overhead_coefficient_a = partition_time_secs / (double) (records_to_partition/1000000000.0); 
+		fprintf(stderr, "Computed partition coeff A: %f\n", partition_overhead_coefficient_a);
+		
+		fprintf(stderr, "Default partition coeff B: %f\n", partition_overhead_coefficient_b);
+		partition_overhead_coefficient_b = task_submit_time_secs / (double) partitions; 
+		fprintf(stderr, "Computed partition coeff B: %f\n", partition_overhead_coefficient_b);
+	}
+
 	return file_offset_start;
 }
 
@@ -201,9 +243,21 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	int *partition_file_line_vals;	
 	
 	int min_pos, min_value;
+	int merged_records = 0;
 	int merged_partitions = 0;
 	int i;	
+	
+	struct timeval current;
+	long long unsigned int merge_start_time, merge_end_time; 
+	double merge_time_secs = 0; 
+	long long unsigned int read_lines_start_time, read_lines_end_time; 
+	double read_lines_time_secs = 0; 
 
+	if(run_timing_code){
+		gettimeofday(&current, 0);
+		merge_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+	}
+	
 	outfile_fp = fopen(outfile, "w");
 	if(!outfile_fp) {
 		fprintf(stderr, "Opening file %s failed: %s!\n", outfile, strerror(errno));
@@ -223,17 +277,43 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 		}
 	}
 
+	if(run_timing_code){
+		gettimeofday(&current, 0);
+		read_lines_start_time = merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+		merge_time_secs += (merge_end_time - merge_start_time)/1000000.0;
+	}
+
 	//read the first lines of each output file into the array
 	for(i = 0; i < partitions; i++) {
 		partition_file_line_vals[i] = get_file_line_value(partition_file_fps[i]);
 	}
 
+	if(run_timing_code){
+		gettimeofday(&current, 0);
+		merge_start_time = read_lines_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+		read_lines_time_secs += (read_lines_end_time - read_lines_start_time)/1000000.0;
+	}
+	
 	//compute the minimum of array and load a new value from the contributing
 	//file into the array index of the minimum.
 	while (merged_partitions < partitions) {
 		min_value = find_min(partition_file_line_vals, partitions, &min_pos);
 		fprintf(outfile_fp, "%d\n", min_value); //write current min value to output file
+		merged_records++;	
+		
+		if(run_timing_code){
+			gettimeofday(&current, 0);
+			read_lines_start_time = merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+			merge_time_secs += (merge_end_time - merge_start_time)/1000000.0;
+		}
+		
 		partition_file_line_vals[min_pos] = get_file_line_value(partition_file_fps[min_pos]);
+		
+		if(run_timing_code){
+			gettimeofday(&current, 0);
+			merge_start_time = read_lines_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+			read_lines_time_secs += (read_lines_end_time - read_lines_start_time)/1000000.0;
+		}
 		if (partition_file_line_vals[min_pos] < 0) {	
 			merged_partitions++;	
 		}
@@ -249,12 +329,28 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	free(partition_file_fps);	
 	fclose(outfile_fp);	
 	
+	if(run_timing_code){
+		gettimeofday(&current, 0);
+		merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+		merge_time_secs += (merge_end_time - merge_start_time)/1000000.0;
+		fprintf(stderr, "Sample merge time: %f, file read time:%f\n", merge_time_secs, read_lines_time_secs);
+	
+		fprintf(stderr, "Default merge coeff A: %f\n", merge_overhead_coefficient_a);
+		merge_overhead_coefficient_a = merge_time_secs / (double) (merged_partitions * merged_records / 1000000000.0); 
+		fprintf(stderr, "Computed merge coeff A: %f\n", merge_overhead_coefficient_a);
+		fprintf(stderr, "Default merge coeff B: %f\n", merge_overhead_coefficient_b);
+		merge_overhead_coefficient_b = read_lines_time_secs / (double) (merged_records / 1000000000.0); 
+		fprintf(stderr, "Computed merge coeff B: %f\n", merge_overhead_coefficient_b);
+	}
+
 	return 1;
 }
 
-void wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_file) {
+double wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_file) {
 	struct work_queue_task *t;	
-	FILE *task_times_fp;
+	FILE *task_times_fp = NULL;
+
+	double task_execution_times = 0;
 
 	if(task_times_file) {
 		task_times_fp = fopen("elastic_sort.tasktimes", "w");
@@ -266,51 +362,50 @@ void wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_fi
 	while(!work_queue_empty(q)) {
 		t = work_queue_wait(q, timeout);
 		if(t) {
-			printf("Task (taskid# %d) complete: %s (return code %d)\n", t->taskid, t->command_line, t->return_status);
-			printf("Task execution time: %llu\n", (long long unsigned) t->cmd_execution_time);
+			printf("Task (taskid# %d) complete in %llu: %s (return code %d)\n", t->taskid, (long long unsigned) t->cmd_execution_time, t->command_line, t->return_status);
+			
+			task_execution_times += t->cmd_execution_time/1000000.00;		
 			if(task_times_fp) {
 				fprintf(task_times_fp, "%d: %llu\n", t->taskid, (long long unsigned) t->cmd_execution_time);	
 			}	
+			
 			work_queue_task_delete(t);
 		}
 	}
-	
+
 	if(task_times_fp)	
 		fclose(task_times_fp);
+
+	return task_execution_times;
 }	
 
 // Sample the execution environment.
 off_t sample_run(struct work_queue *q, const char *executable, const char *executable_args, const char *infile, int infile_offset_start, const char *partition_file_prefix, const char *outfile, int partitions, int records_to_sort) {
-	
-	printf("Sampling the execution environment with %d partitions!\n", SAMPLE_SIZE_DEFAULT);
+
+	double sample_task_runtimes = 0;
+
+	printf("Sampling the execution environment with %d partitions!\n", partitions);
+
+	//turn on timing code to compute the model coefficients if the sample size is large enough (100million).
+	if(records_to_sort >= 100000000)
+		run_timing_code = 1; 
 	
 	off_t partition_offset_end = partition_tasks(q, executable, executable_args, infile, infile_offset_start, partition_file_prefix, partitions, records_to_sort);	
 	
-	wait_partition_tasks(q, 5, NULL);
+	sample_task_runtimes = wait_partition_tasks(q, 5, NULL);
+	fprintf(stderr, "Sample task times: %f\n", sample_task_runtimes);
+	fprintf(stderr, "Default per record sort time: %f\n", per_record_sort_time);
+	per_record_sort_time = sample_task_runtimes/(double)records_to_sort;
+	fprintf(stderr, "Computed per record sort time: %f\n", per_record_sort_time);
 
-	merge_sorted_outputs(outfile, partition_file_prefix, SAMPLE_SIZE_DEFAULT);	
+	merge_sorted_outputs(outfile, partition_file_prefix, partitions);	
+	
+	run_timing_code = 0; //turn off timing code.
 	
 	created_partitions = 1;	 //we merge the sample partitions to 1.
 	return partition_offset_end;
 }
 
-double get_partition_coefficient(char *input_file) {
-	
-	//Sample the time to partition to empirically compute the partition coefficient 'a' in the model.
-	struct timeval current;
-	FILE *fp = fopen(input_file, "r");	
-	long long unsigned int sample_partition_start_time, sample_partition_end_time, sample_partition_time; 
-	
-	gettimeofday(&current, 0);
-	sample_partition_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-	get_file_line_end_offset(fp, 0, total_records/10); 
-	gettimeofday(&current, 0);
-	sample_partition_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-	sample_partition_time = sample_partition_end_time - sample_partition_start_time;
-
-	fclose(fp);
-	return 10*(sample_partition_time/1000000.0); 
-}
 
 double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth, int resources, int tasks) {
 	//Model: T(n,k,r) = [T_part + T_merge] + [(t*n)/k * ceil(k/r)] + [(d_n + (d_r * r))/BW_Bps]
@@ -352,20 +447,17 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	//we transfer the records twice - for input and output.
 	transfer_overhead = ((double)((2*record_bytes) + (sw_bytes * resources))) / BW_Bps;
 
-	parallel_execution_time = (total_records * per_record_execution_time) / tasks;	
+	parallel_execution_time = (total_records * per_record_sort_time) / tasks;	
 	parallel_execution_time *= ceil((double)tasks/(double)resources);
 	
 	/* Model of partition is based on the partitioning done in partition_tasks():
-	 * Its asymptotic runtime is O(n) where n is number of records in billions and m is number of partitions.
-	 * Its actual runtime is modeled as: (a*n). The values of a and b are found by sampling.
+	 * Its asymptotic runtime is O(n+m) where n is number of records and m is number of partitions.
+	 * Its actual runtime is modeled as: (a*n + b*m). The values of a and b are found by sampling.
 	 */	
-	if(!partition_overhead_coefficient_a) 
-		partition_overhead_coefficient_a = get_partition_coefficient(input_file);
-
-	partition_overhead = (partition_overhead_coefficient_a * total_records_in_billion); 
+	partition_overhead = (partition_overhead_coefficient_a * total_records_in_billion) + (partition_overhead_coefficient_b * tasks); 
 	
 	/* Model of merge is based on the running time of merge_sorted_outputs():
-	 * Its asymptotic runtime is O(n*m) where n is number of records in billions and m is number of partitions.
+	 * Its asymptotic runtime is O(n*m) where n is number of records and m is number of partitions.
 	 * Its actual runtime is modeled as: (a*n*m + b*n). The values of a and b are found sampling.
 	 */
 	merge_overhead = (merge_overhead_coefficient_a * total_records_in_billion * tasks) + (merge_overhead_coefficient_b * total_records_in_billion);	
@@ -428,7 +520,7 @@ static void show_help(const char *cmd) {
 int main(int argc, char *argv[])
 {
 	struct work_queue *q;
-	int port = 9000;
+	int port = 0; //pick an arbitrary port
 	int c;
 
 	char *sort_arguments = NULL;
@@ -504,7 +596,7 @@ int main(int argc, char *argv[])
 
 	char sort_executable[256], infile[256]; 
 	off_t last_partition_offset_end = 0;
-	int records;	
+	long long records;	
 	int optimal_partitions, optimal_resources, current_optimal_partitions;
 	double current_optimal_time = DBL_MAX;
 	double optimal_times[5];
@@ -589,7 +681,7 @@ int main(int argc, char *argv[])
 	records = total_records;
 
 	if(sample_env) {
-		int sample_record_size = (5*records)/100; //sample size is 5% of the total records
+		int sample_record_size = (10*records)/100; //sample size is 10% of the total records
 		
 		char *sample_partition_file_prefix = (char *) malloc((strlen(outfile)+8) * sizeof(char));
 		sprintf(sample_partition_file_prefix, "%s.sample", outfile);
