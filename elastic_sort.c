@@ -44,6 +44,7 @@ double partition_overhead_coefficient_b = PARTITION_COEFF_B_DEFAULT;
 double merge_overhead_coefficient_a = MERGE_COEFF_A_DEFAULT;
 double merge_overhead_coefficient_b = MERGE_COEFF_B_DEFAULT;
 double per_record_sort_time = PER_RECORD_SORT_TIME_DEFAULT;
+double bandwidth_bytes_per_sec = BW_DEFAULT * 1000000 / 8.0;
 	
 static int created_partitions = 0;	
 static int run_timing_code = 0;
@@ -337,6 +338,8 @@ double wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_
 	FILE *task_times_fp = NULL;
 
 	double task_execution_times = 0;
+	int64_t total_transfered_bytes = 0;
+	time_t total_transfer_time = 0;
 
 	if(task_times_file) {
 		task_times_fp = fopen("elastic_sort.tasktimes", "w");
@@ -350,7 +353,12 @@ double wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_
 		if(t) {
 			printf("Task (taskid# %d) complete in %llu: %s (return code %d)\n", t->taskid, (long long unsigned) t->cmd_execution_time, t->command_line, t->return_status);
 			
+			total_transfered_bytes += t->total_bytes_transferred;
+			total_transfer_time += t->total_transfer_time;
+			bandwidth_bytes_per_sec  = total_transfered_bytes / (total_transfer_time/1000000.0); 
+			
 			task_execution_times += t->cmd_execution_time/1000000.00;		
+
 			if(task_times_fp) {
 				fprintf(task_times_fp, "%d: %llu\n", t->taskid, (long long unsigned) t->cmd_execution_time);	
 			}	
@@ -393,7 +401,7 @@ off_t sample_run(struct work_queue *q, const char *executable, const char *execu
 }
 
 
-double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth, int resources, int tasks) {
+double* sort_estimate_runtime(char *input_file, char *executable, int resources, int tasks) {
 	//Model: T(n,k,r) = [T_part + T_merge] + [(t*n)/k * ceil(k/r)] + [(d_n + (d_r * r))/BW_Bps]
 	
 	double partition_overhead;
@@ -403,8 +411,6 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	double total_execution_time;
 	double *estimated_times;
 
-	int BW_Bps = bandwidth * 1000000/8; //assume 100Mbps = 100000000/8 Bytes per sec to start
-	
 	double total_records_in_billion;	
 	long long record_bytes = 0;
 	long long sw_bytes = 0;
@@ -431,7 +437,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	total_records_in_billion = total_records/1000000000.0;
 	
 	//we transfer the records twice - for input and output.
-	transfer_overhead = ((double)((2*record_bytes) + (sw_bytes * resources))) / BW_Bps;
+	transfer_overhead = ((double)((2*record_bytes) + (sw_bytes * resources))) / bandwidth_bytes_per_sec;
 
 	parallel_execution_time = (total_records * per_record_sort_time) / tasks;	
 	parallel_execution_time *= ceil((double)tasks/(double)resources);
@@ -463,14 +469,14 @@ double* sort_estimate_runtime(char *input_file, char *executable, int bandwidth,
 	return estimated_times;
 }
 
-int print_optimal_runtimes(char *input_file, char *executable, int bandwidth, int resources, double *optimal_times) {
+int print_optimal_runtimes(char *input_file, char *executable, int resources, double *optimal_times) {
 	double *estimated_times;
 	double optimal_execution_time = -1;
 	double execution_time = -1;
 	int optimal_partitions;
 	int i;
 	for (i = 1; i <= 5*resources; i++) { 	
-		estimated_times = sort_estimate_runtime(input_file, executable, bandwidth, resources, i);
+		estimated_times = sort_estimate_runtime(input_file, executable, resources, i);
 		execution_time = estimated_times[0];
 		if (optimal_execution_time < 0 || execution_time < optimal_execution_time) {
 			optimal_execution_time = optimal_times[0] = execution_time;
@@ -522,7 +528,6 @@ int main(int argc, char *argv[])
 	int keepalive_interval = 300;
 	int keepalive_timeout = 30;
 
-	int bandwidth = BW_DEFAULT; 
 	int partitions = PARTITION_DEFAULT;
 	int sample_size = SAMPLE_SIZE_DEFAULT;
 
@@ -574,7 +579,7 @@ int main(int argc, char *argv[])
 			keepalive_timeout = atoi(optarg);
 			break;
 		case 'B':
-			bandwidth = atoi(optarg);
+			bandwidth_bytes_per_sec = atoi(optarg) * 1000000 / 8.0;
 			break;
 		case 'h':
 			show_help(argv[0]);
@@ -607,7 +612,7 @@ int main(int argc, char *argv[])
 	if(estimate_partition) {
 		double *estimated_runtimes = (double *)malloc(sizeof(double) * 5); 
 		for (i = 1; i <= 2*estimate_partition; i++) {
-			estimated_runtimes = sort_estimate_runtime(infile, sort_executable, bandwidth, i, estimate_partition); 
+			estimated_runtimes = sort_estimate_runtime(infile, sort_executable, i, estimate_partition); 
 			if(estimated_runtimes[0] < current_optimal_time) {
 				current_optimal_time = estimated_runtimes[0];
 				optimal_times[0] = estimated_runtimes[0];
@@ -624,9 +629,9 @@ int main(int argc, char *argv[])
 	}
 
 	if(print_runtime_estimates) {
-		printf("Resources \t Partitions \t Runtime \t Part time \t Merge time\n");
+		printf("Resources \t Partitions \t Runtime \t Part time \t Merge time \t Task time \t Transfer time\n");
 		for (i = 1; i <= 100; i++) {
-			optimal_partitions = print_optimal_runtimes(infile, sort_executable, bandwidth, i, optimal_times); 
+			optimal_partitions = print_optimal_runtimes(infile, sort_executable, i, optimal_times); 
 			printf("%d \t \t %d \t %f \t %f \t %f \t %f \t %f\n", i, optimal_partitions, optimal_times[0], optimal_times[1], optimal_times[2], optimal_times[3], optimal_times[4]);	
 		}
 		return 1;	
@@ -635,7 +640,7 @@ int main(int argc, char *argv[])
 	if(auto_partition) {
 		printf("Determining optimal partition size for %s\n", infile);
 		for (i = 1; i <= 100; i++) {
-			current_optimal_partitions = print_optimal_runtimes(infile, sort_executable, bandwidth, i, optimal_times); 
+			current_optimal_partitions = print_optimal_runtimes(infile, sort_executable, i, optimal_times); 
 			if (optimal_times[0] < current_optimal_time) {
 				current_optimal_time = optimal_times[0];	
 				optimal_partitions = current_optimal_partitions;
