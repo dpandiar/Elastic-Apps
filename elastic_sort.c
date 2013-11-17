@@ -243,21 +243,14 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	int *partition_file_line_vals;	
 	
 	int min_pos, min_value;
-	int merged_records = 0;
+	long long merged_records = 0;
 	int merged_partitions = 0;
 	int i;	
 	
 	struct timeval current;
-	long long unsigned int merge_start_time, merge_end_time; 
-	double merge_time_secs = 0; 
 	long long unsigned int read_lines_start_time, read_lines_end_time; 
 	double read_lines_time_secs = 0; 
 
-	if(run_timing_code){
-		gettimeofday(&current, 0);
-		merge_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-	}
-	
 	outfile_fp = fopen(outfile, "w");
 	if(!outfile_fp) {
 		fprintf(stderr, "Opening file %s failed: %s!\n", outfile, strerror(errno));
@@ -267,6 +260,11 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	partition_file_line_vals = malloc(sizeof(int) * partitions);
 	partition_file_fps = malloc(sizeof(FILE *) * partitions);
 
+	if(run_timing_code){
+		gettimeofday(&current, 0);
+		read_lines_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+	}
+	
 	for(i = 0; i < partitions; i++) {
 		sprintf(partition_file, "%s.%d", partition_file_prefix, i);	
 		partition_file_fps[i] = fopen(partition_file, "r");
@@ -277,12 +275,6 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 		}
 	}
 
-	if(run_timing_code){
-		gettimeofday(&current, 0);
-		read_lines_start_time = merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-		merge_time_secs += (merge_end_time - merge_start_time)/1000000.0;
-	}
-
 	//read the first lines of each output file into the array
 	for(i = 0; i < partitions; i++) {
 		partition_file_line_vals[i] = get_file_line_value(partition_file_fps[i]);
@@ -290,7 +282,7 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 
 	if(run_timing_code){
 		gettimeofday(&current, 0);
-		merge_start_time = read_lines_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+		read_lines_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 		read_lines_time_secs += (read_lines_end_time - read_lines_start_time)/1000000.0;
 	}
 	
@@ -298,22 +290,22 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	//file into the array index of the minimum.
 	while (merged_partitions < partitions) {
 		min_value = find_min(partition_file_line_vals, partitions, &min_pos);
-		fprintf(outfile_fp, "%d\n", min_value); //write current min value to output file
-		merged_records++;	
-		
 		if(run_timing_code){
 			gettimeofday(&current, 0);
-			read_lines_start_time = merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-			merge_time_secs += (merge_end_time - merge_start_time)/1000000.0;
+			read_lines_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 		}
+		
+		fprintf(outfile_fp, "%d\n", min_value); //write current min value to output file
 		
 		partition_file_line_vals[min_pos] = get_file_line_value(partition_file_fps[min_pos]);
 		
 		if(run_timing_code){
 			gettimeofday(&current, 0);
-			merge_start_time = read_lines_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+			read_lines_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 			read_lines_time_secs += (read_lines_end_time - read_lines_start_time)/1000000.0;
 		}
+		
+		merged_records++;	
 		if (partition_file_line_vals[min_pos] < 0) {	
 			merged_partitions++;	
 		}
@@ -330,14 +322,8 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	fclose(outfile_fp);	
 	
 	if(run_timing_code){
-		gettimeofday(&current, 0);
-		merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-		merge_time_secs += (merge_end_time - merge_start_time)/1000000.0;
-		fprintf(stderr, "Sample merge time: %f, file read time:%f\n", merge_time_secs, read_lines_time_secs);
-	
-		fprintf(stderr, "Default merge coeff A: %f\n", merge_overhead_coefficient_a);
-		merge_overhead_coefficient_a = merge_time_secs / (double) (merged_partitions * merged_records / 1000000000.0); 
-		fprintf(stderr, "Computed merge coeff A: %f\n", merge_overhead_coefficient_a);
+		//Coefficent A is really small and we can just use the default. 
+		fprintf(stderr, "Merged records: %lld, file read time:%f\n", merged_records, read_lines_time_secs);
 		fprintf(stderr, "Default merge coeff B: %f\n", merge_overhead_coefficient_b);
 		merge_overhead_coefficient_b = read_lines_time_secs / (double) (merged_records / 1000000000.0); 
 		fprintf(stderr, "Computed merge coeff B: %f\n", merge_overhead_coefficient_b);
