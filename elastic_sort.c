@@ -492,7 +492,8 @@ static void show_help(const char *cmd) {
 	fprintf(stdout, " %-30s Specify the number of partitions to create of the input data. (default = 20)\n", "-k <int>");
 	fprintf(stdout, " %-30s Specify the output file name for the sorted records. (default = <infile>.sorted)\n", "-o <string>");
 	fprintf(stdout, " %-30s Automatically determine the optimal partition size. (default = 20)\n", "-A <int>");
-	fprintf(stdout, " %-30s Empirically estimate the model coefficients by sampling the execution environment. (default = off)\n", "-S <int>");
+	fprintf(stdout, " %-30s Empirically estimate the model coefficients by sampling the execution environment. (default = off)\n", "-S");
+	fprintf(stdout, " %-30s Specify the number of sample partitions. (default = %d)\n", "-s <int>", SAMPLE_SIZE_DEFAULT);
 	fprintf(stdout, " %-30s Specify the arguments for the sort program.\n", "-p <string>");
 	fprintf(stdout, " %-30s Estimate and print the optimal number of partitions for different resource sizes and exit.\n", "-M");
 	fprintf(stdout, " %-30s Specify the number of records in the input file.(default=auto).\n", "-L <int>");
@@ -523,6 +524,7 @@ int main(int argc, char *argv[])
 
 	int bandwidth = BW_DEFAULT; 
 	int partitions = PARTITION_DEFAULT;
+	int sample_size = SAMPLE_SIZE_DEFAULT;
 
 	gettimeofday(&current, 0);
 	execn_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
@@ -533,7 +535,7 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 		
-	while((c = getopt(argc, argv, "N:k:o:ASp:MR:L:I:T:B:h")) != (char) -1) {
+	while((c = getopt(argc, argv, "N:k:o:ASs:p:MR:L:I:T:B:h")) != (char) -1) {
 		switch (c) {
 		case 'N':
 			proj_name = strdup(optarg);
@@ -546,6 +548,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'A':
 			auto_partition = 1;
+			break;
+		case 's':
+			sample_size = atoi(optarg);
 			break;
 		case 'S':
 			sample_env = 1;
@@ -675,7 +680,7 @@ int main(int argc, char *argv[])
 		char *sample_outfile = (char *) malloc((strlen(outfile)+3) * sizeof(char));
 		sprintf(sample_outfile, "%s.0", outfile);
 		
-		sample_partition_offset_end = sample_run(q, sort_executable, sort_arguments, infile, 0, sample_partition_file_prefix, sample_outfile, SAMPLE_SIZE_DEFAULT, sample_record_size);	
+		sample_partition_offset_end = sample_run(q, sort_executable, sort_arguments, infile, 0, sample_partition_file_prefix, sample_outfile, sample_size, sample_record_size);	
 		
 		records = total_records - sample_record_size;
 		
