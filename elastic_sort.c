@@ -469,7 +469,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int resources,
 	return estimated_times;
 }
 
-int print_optimal_runtimes(char *input_file, char *executable, int resources, double *optimal_times) {
+int get_optimal_runtimes(char *input_file, char *executable, int resources, double *optimal_times) {
 	double *estimated_times;
 	double optimal_execution_time = -1;
 	double execution_time = -1;
@@ -631,25 +631,10 @@ int main(int argc, char *argv[])
 	if(print_runtime_estimates) {
 		printf("Resources \t Partitions \t Runtime \t Part time \t Merge time \t Task time \t Transfer time\n");
 		for (i = 1; i <= 100; i++) {
-			optimal_partitions = print_optimal_runtimes(infile, sort_executable, i, optimal_times); 
+			optimal_partitions = get_optimal_runtimes(infile, sort_executable, i, optimal_times); 
 			printf("%d \t \t %d \t %f \t %f \t %f \t %f \t %f\n", i, optimal_partitions, optimal_times[0], optimal_times[1], optimal_times[2], optimal_times[3], optimal_times[4]);	
 		}
 		return 1;	
-	}
-
-	if(auto_partition) {
-		printf("Determining optimal partition size for %s\n", infile);
-		for (i = 1; i <= 100; i++) {
-			current_optimal_partitions = print_optimal_runtimes(infile, sort_executable, i, optimal_times); 
-			if (optimal_times[0] < current_optimal_time) {
-				current_optimal_time = optimal_times[0];	
-				optimal_partitions = current_optimal_partitions;
-				optimal_resources = i;	
-			}
-		}
-		printf("Optimal partition size is %d that runs the workload in %f\n", optimal_partitions, current_optimal_time);	
-		printf("--> Please allocate %d resources for running this workload in a cost-efficient manner.\n", optimal_resources);	
-		partitions = optimal_partitions;	
 	}
 
 	q = work_queue_create(port);
@@ -691,6 +676,21 @@ int main(int argc, char *argv[])
 		
 		free(sample_partition_file_prefix);
 		free(sample_outfile);
+	}
+
+	if(auto_partition) {
+		printf("Determining optimal partition size for %s\n", infile);
+		for (i = 1; i <= 100; i++) {
+			current_optimal_partitions = get_optimal_runtimes(infile, sort_executable, i, optimal_times); 
+			if (optimal_times[0] < current_optimal_time) {
+				current_optimal_time = optimal_times[0];	
+				optimal_partitions = current_optimal_partitions;
+				optimal_resources = i;	
+			}
+		}
+		printf("Optimal partition size is %d that runs the workload in %f\n", optimal_partitions, current_optimal_time);	
+		printf("--> Please allocate %d resources for running this workload in a cost-efficient manner.\n", optimal_resources);	
+		partitions = optimal_partitions;	
 	}
 
 	long long unsigned int part_start_time, part_end_time, part_time;
