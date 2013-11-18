@@ -51,6 +51,11 @@ static int run_timing_code = 0;
 
 unsigned long long get_total_lines(char *infile) {
 	FILE *input_file = fopen(infile, "r");
+	if (input_file == NULL) {
+		fprintf (stderr, "Opening %s file failed: %s!\n", infile, strerror(errno)); 
+		return -1;	
+	}
+	
 	unsigned long long line_count = 0; 
 	int ch;
 	
@@ -95,20 +100,20 @@ int submit_task(struct work_queue *q, const char *command, const char *executabl
 
 	t = work_queue_task_create(command);
 	if (!work_queue_task_specify_file_piece(t, infile, basename(infile_dup), infile_offset_start, infile_offset_end, WORK_QUEUE_INPUT, WORK_QUEUE_NOCACHE)) {
-		printf("task_specify_file_piece() failed for %s: start offset %ld, end offset %ld.\n", infile, infile_offset_start, infile_offset_end);
+		fprintf(stderr, "task_specify_file_piece() failed for %s: start offset %ld, end offset %ld.\n", infile, infile_offset_start, infile_offset_end);
 		return 0;	
 	}
 	if (!work_queue_task_specify_file(t, executable, basename(executable_dup), WORK_QUEUE_INPUT, WORK_QUEUE_CACHE)) {
-		printf("task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", executable);
+		fprintf(stderr, "task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", executable);
 		return 0;	
 	}
 	if (!work_queue_task_specify_file(t, outfile, outfile, WORK_QUEUE_OUTPUT, WORK_QUEUE_NOCACHE)) {
-		printf("task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", outfile);
+		fprintf(stderr, "task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", outfile);
 		return 0;	
 	}
 
 	taskid = work_queue_submit(q, t);
-	printf("submitted task (id# %d): %s\n", taskid, t->command_line);
+	fprintf(stdout, "submitted task (id# %d): %s\n", taskid, t->command_line);
 
 	free(infile_dup);
 	free(executable_dup);
@@ -147,7 +152,7 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 
 	infile_fs = fopen(infile, "r");
 	if (infile_fs == NULL) {
-		printf ("Opening %s file failed: %s!\n", infile, strerror(errno)); 
+		fprintf (stderr, "Opening %s file failed: %s!\n", infile, strerror(errno)); 
 		return 0;	
 	}	
 	
@@ -157,7 +162,7 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 		task_end_line += lines_to_submit;
 		file_offset_end = get_file_line_end_offset(infile_fs, file_offset_start, lines_to_submit);		
 		if (file_offset_end < 0) {
-			printf ("End file offset for line %llu is:%ld\n", task_end_line, file_offset_end);
+			fprintf (stderr, "End file offset for line %llu is:%ld\n", task_end_line, file_offset_end);
 			return 0;	
 		}
 		
@@ -344,18 +349,21 @@ double wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_
 	if(task_times_file) {
 		task_times_fp = fopen("elastic_sort.tasktimes", "w");
 		if (!task_times_fp) {
-        	printf("Opening of elastic_sort.tasktimes file failed!\n");
+        	fprintf(stderr, "Opening of elastic_sort.tasktimes file failed!\n");
     	}
 	}
 
 	while(!work_queue_empty(q)) {
 		t = work_queue_wait(q, timeout);
 		if(t) {
-			printf("Task (taskid# %d) complete in %llu: %s (return code %d)\n", t->taskid, (long long unsigned) t->cmd_execution_time, t->command_line, t->return_status);
+			fprintf(stdout, "Task (taskid# %d) complete in %llu: %s (return code %d)\n", t->taskid, (long long unsigned) t->cmd_execution_time, t->command_line, t->return_status);
 			
 			total_transfered_bytes += t->total_bytes_transferred;
 			total_transfer_time += t->total_transfer_time;
+			fprintf(stderr, "Total bytes sent %" PRId64 " in %llu s\n", total_transfered_bytes, (long long unsigned) total_transfer_time);
+			fprintf(stderr, "Default bandwidth (Bps): %f\n", bandwidth_bytes_per_sec);
 			bandwidth_bytes_per_sec  = total_transfered_bytes / (total_transfer_time/1000000.0); 
+			fprintf(stderr, "Measured bandwidth (Bps): %f\n", bandwidth_bytes_per_sec);
 			
 			task_execution_times += t->cmd_execution_time/1000000.00;		
 
@@ -378,7 +386,7 @@ off_t sample_run(struct work_queue *q, const char *executable, const char *execu
 
 	double sample_task_runtimes = 0;
 
-	printf("Sampling the execution environment with %d partitions!\n", partitions);
+	fprintf(stdout, "Sampling the execution environment with %d partitions!\n", partitions);
 
 	//turn on timing code to compute the model coefficients if the sample size is large enough (100million).
 	if(records_to_sort >= 100000000)
@@ -432,8 +440,11 @@ double* sort_estimate_runtime(char *input_file, char *executable, int resources,
 		
 	if(total_records == 0) {
 		total_records = get_total_lines(input_file);
-	} 
-
+		if(total_records < 0) {
+			fprintf(stderr, "Error in reading records.\n");
+			return NULL;	
+		}	
+	}
 	total_records_in_billion = total_records/1000000000.0;
 	
 	//we transfer the records twice - for input and output.
@@ -458,7 +469,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, int resources,
 
 	estimated_times = (double *)malloc(sizeof(double) * 5);
 	if (estimated_times == NULL) {
-		printf ("Allocating memory for estimated_times failed!\n");
+		fprintf (stderr, "Allocating memory for estimated_times failed!\n");
 		return NULL;
 	}
 	estimated_times[0] = total_execution_time;
@@ -623,27 +634,27 @@ int main(int argc, char *argv[])
 				optimal_resources = i;
 			}
 		}	
-		printf("For partition %d: %d %f %f %f %f %f\n", estimate_partition, optimal_resources, optimal_times[0], optimal_times[1], optimal_times[2], optimal_times[3], optimal_times[4]);	
+		fprintf(stdout, "For partition %d: %d %f %f %f %f %f\n", estimate_partition, optimal_resources, optimal_times[0], optimal_times[1], optimal_times[2], optimal_times[3], optimal_times[4]);	
 		free(estimated_runtimes);	
 		return 1;	
 	}
 
 	if(print_runtime_estimates) {
-		printf("Resources \t Partitions \t Runtime \t Part time \t Merge time \t Task time \t Transfer time\n");
+		fprintf(stdout, "Resources \t Partitions \t Runtime \t Part time \t Merge time \t Task time \t Transfer time\n");
 		for (i = 1; i <= 100; i++) {
 			optimal_partitions = get_optimal_runtimes(infile, sort_executable, i, optimal_times); 
-			printf("%d \t \t %d \t %f \t %f \t %f \t %f \t %f\n", i, optimal_partitions, optimal_times[0], optimal_times[1], optimal_times[2], optimal_times[3], optimal_times[4]);	
+			fprintf(stdout, "%d \t \t %d \t %f \t %f \t %f \t %f \t %f\n", i, optimal_partitions, optimal_times[0], optimal_times[1], optimal_times[2], optimal_times[3], optimal_times[4]);	
 		}
 		return 1;	
 	}
 
 	q = work_queue_create(port);
 	if(!q) {
-		printf("couldn't listen on port %d: %s\n", port, strerror(errno));
+		fprintf(stderr, "couldn't listen on port %d: %s\n", port, strerror(errno));
 		return 1;
 	}
 
-	printf("listening on port %d...\n", work_queue_port(q));
+	fprintf(stdout, "listening on port %d...\n", work_queue_port(q));
 	
 	if(proj_name){
 		work_queue_specify_master_mode(q, WORK_QUEUE_MASTER_MODE_CATALOG);	
@@ -654,11 +665,15 @@ int main(int argc, char *argv[])
 
 	free((void *)proj_name);
 
-	printf("%s will be run to sort contents of %s\n", sort_executable, infile);
+	fprintf(stdout, "%s will be run to sort contents of %s\n", sort_executable, infile);
 
 	if(total_records == 0) {
 		total_records = get_total_lines(infile);
-	} 
+		if(total_records < 0) {
+			fprintf(stderr, "Error in reading records. Quitting...\n");
+			return 0;	
+		}
+	}
 	records = total_records;
 
 	if(sample_env) {
@@ -679,7 +694,7 @@ int main(int argc, char *argv[])
 	}
 
 	if(auto_partition) {
-		printf("Determining optimal partition size for %s\n", infile);
+		fprintf(stdout, "Determining optimal partition size for %s\n", infile);
 		for (i = 1; i <= 100; i++) {
 			current_optimal_partitions = get_optimal_runtimes(infile, sort_executable, i, optimal_times); 
 			if (optimal_times[0] < current_optimal_time) {
@@ -688,8 +703,8 @@ int main(int argc, char *argv[])
 				optimal_resources = i;	
 			}
 		}
-		printf("Optimal partition size is %d that runs the workload in %f\n", optimal_partitions, current_optimal_time);	
-		printf("--> Please allocate %d resources for running this workload in a cost-efficient manner.\n", optimal_resources);	
+		fprintf(stdout, "Optimal partition size is %d that runs the workload in %f\n", optimal_partitions, current_optimal_time);	
+		fprintf(stdout, "--> Please allocate %d resources for running this workload in a cost-efficient manner.\n", optimal_resources);	
 		partitions = optimal_partitions;	
 	}
 
@@ -698,15 +713,19 @@ int main(int argc, char *argv[])
 	part_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
 	last_partition_offset_end = partition_tasks(q, sort_executable, sort_arguments, infile, 0+sample_partition_offset_end, outfile, partitions, records);
-    	
+	if(last_partition_offset_end <= 0) {
+		fprintf(stderr, "Partitioning failed. Quitting...\n");
+		return 0;
+	}
+
 	gettimeofday(&current, 0);
 	part_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 	part_time = part_end_time - part_start_time;
-	printf("Partition time is %llu\n", part_time);
+	fprintf(stdout, "Partition time is %llu\n", part_time);
 	
 	free(sort_arguments);
 
-	printf("Waiting for tasks to complete...\n");
+	fprintf(stdout, "Waiting for tasks to complete...\n");
 	long long unsigned int parallel_start_time, parallel_end_time, parallel_time;
 	gettimeofday(&current, 0);
 	parallel_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
@@ -719,7 +738,7 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	parallel_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 	parallel_time = parallel_end_time - parallel_start_time;
-	printf("Parallel execution time is %llu\n", parallel_time);
+	fprintf(stdout, "Parallel execution time is %llu\n", parallel_time);
 	
 	long long unsigned int merge_start_time, merge_end_time, merge_time;
 	gettimeofday(&current, 0);
@@ -730,12 +749,12 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 	merge_time = merge_end_time - merge_start_time;
-	printf("Merge time is %llu\n", merge_time);
+	fprintf(stdout, "Merge time is %llu\n", merge_time);
 	
-	printf("Sorting complete. Output is at: %s!\n", outfile);
+	fprintf(stdout, "Sorting complete. Output is at: %s!\n", outfile);
 
 	execn_time = merge_end_time - execn_start_time;
-	printf("Execn time is %llu\n", execn_time);
+	fprintf(stdout, "Execn time is %llu\n", execn_time);
 
 	FILE *time_file = fopen("wq_sort.times", "w");
 	if (time_file) {
