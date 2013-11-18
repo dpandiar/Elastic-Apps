@@ -97,6 +97,7 @@ int submit_task(struct work_queue *q, const char *command, const char *executabl
 
 	char *infile_dup = strdup(infile); //basename() modifies its arguments. So we need to pass a duplicate.
 	char *executable_dup = strdup(executable);
+	char *outfile_dup = strdup(outfile);
 
 	t = work_queue_task_create(command);
 	if (!work_queue_task_specify_file_piece(t, infile, basename(infile_dup), infile_offset_start, infile_offset_end, WORK_QUEUE_INPUT, WORK_QUEUE_NOCACHE)) {
@@ -107,7 +108,7 @@ int submit_task(struct work_queue *q, const char *command, const char *executabl
 		fprintf(stderr, "task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", executable);
 		return 0;	
 	}
-	if (!work_queue_task_specify_file(t, outfile, outfile, WORK_QUEUE_OUTPUT, WORK_QUEUE_NOCACHE)) {
+	if (!work_queue_task_specify_file(t, outfile, basename(outfile_dup), WORK_QUEUE_OUTPUT, WORK_QUEUE_NOCACHE)) {
 		fprintf(stderr, "task_specify_file() failed for %s: check if arguments are null or remote name is an absolute path.\n", outfile);
 		return 0;	
 	}
@@ -117,6 +118,7 @@ int submit_task(struct work_queue *q, const char *command, const char *executabl
 
 	free(infile_dup);
 	free(executable_dup);
+	free(outfile_dup);
 
 	return taskid;
 }
