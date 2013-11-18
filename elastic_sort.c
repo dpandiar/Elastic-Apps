@@ -176,20 +176,8 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 			sprintf(command, "./%s %s > %s", executable, remote_infile, outfile);
 		}
 
-		if(run_timing_code) {
-			gettimeofday(&current, 0);
-			task_submit_start_time = partition_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-			partition_time_secs += (partition_end_time - partition_start_time) / 1000000.0;
-		}
-
 		if(!submit_task(q, command, executable, infile, file_offset_start, file_offset_end, outfile))
 			return 0;
-
-		if(run_timing_code) {
-			gettimeofday(&current, 0);
-			partition_start_time = task_submit_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-			task_submit_time_secs += (task_submit_end_time - task_submit_start_time) / 1000000.0;
-		}
 
 		created_partitions++;
 		file_offset_start = file_offset_end + 1;
@@ -203,13 +191,11 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 		partition_time_secs += (partition_end_time - partition_start_time) / 1000000.0;
 		fprintf(stderr, "Sample partition time is %f and task submission time is %f\n", partition_time_secs, task_submit_time_secs);
 	
+		//Coefficent B is expected to be really small and so we just use the default. 
 		fprintf(stderr, "Default partition coeff A: %f\n", partition_overhead_coefficient_a);
 		partition_overhead_coefficient_a = partition_time_secs / (double) (records_to_partition/1000000000.0); 
 		fprintf(stderr, "Computed partition coeff A: %f\n", partition_overhead_coefficient_a);
 		
-		fprintf(stderr, "Default partition coeff B: %f\n", partition_overhead_coefficient_b);
-		partition_overhead_coefficient_b = task_submit_time_secs / (double) partitions; 
-		fprintf(stderr, "Computed partition coeff B: %f\n", partition_overhead_coefficient_b);
 	}
 
 	return file_offset_start;
@@ -330,7 +316,7 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	fclose(outfile_fp);	
 	
 	if(run_timing_code){
-		//Coefficent A is really small and we can just use the default. 
+		//Coefficent A is expected to be really small and so we just use the default. 
 		fprintf(stderr, "Merged records: %lld, file read time:%f\n", merged_records, read_lines_time_secs);
 		fprintf(stderr, "Default merge coeff B: %f\n", merge_overhead_coefficient_b);
 		merge_overhead_coefficient_b = read_lines_time_secs / (double) (merged_records / 1000000000.0); 
