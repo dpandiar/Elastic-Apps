@@ -662,7 +662,10 @@ int main(int argc, char *argv[])
 	}
 	records = total_records;
 
+	long long unsigned int sample_start_time, sample_end_time, sample_time;
 	if(sample_env) {
+		gettimeofday(&current, 0);
+		sample_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 		int sample_record_size = (10*records)/100; //sample size is 10% of the total records
 		
 		char *sample_partition_file_prefix = (char *) malloc((strlen(outfile)+8) * sizeof(char));
@@ -677,6 +680,10 @@ int main(int argc, char *argv[])
 		
 		free(sample_partition_file_prefix);
 		free(sample_outfile);
+		gettimeofday(&current, 0);
+		sample_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
+		sample_time = sample_end_time - sample_start_time;
+		fprintf(stdout, "Sampling time is %llu\n", sample_time);
 	}
 
 	if(auto_partition) {
@@ -748,6 +755,8 @@ int main(int argc, char *argv[])
 		fprintf(time_file, "Partition time: %llu\n", part_time);
 		fprintf(time_file, "Parallel time: %llu\n", parallel_time);
 		fprintf(time_file, "Merge time: %llu\n", merge_time);
+		if(sample_env)	
+			fprintf(time_file, "Sampling time: %llu\n", sample_time);
 		fprintf(time_file, "Workload execution time: %llu\n", workload_runtime);
 		fprintf(time_file, "Total execution time: %llu\n", execn_time);
 	}
