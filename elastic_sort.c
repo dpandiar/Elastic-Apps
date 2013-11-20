@@ -138,8 +138,6 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 	struct timeval current;
 	long long unsigned int partition_start_time, partition_end_time; 
 	double partition_time_secs = 0; 
-	long long unsigned int task_submit_start_time, task_submit_end_time; 
-	double task_submit_time_secs = 0; 
 	
 	if(run_timing_code){
 		gettimeofday(&current, 0);
@@ -189,7 +187,7 @@ off_t partition_tasks(struct work_queue *q, const char *executable, const char *
 		gettimeofday(&current, 0);
 		partition_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 		partition_time_secs += (partition_end_time - partition_start_time) / 1000000.0;
-		fprintf(stderr, "Sample partition time is %f and task submission time is %f\n", partition_time_secs, task_submit_time_secs);
+		fprintf(stderr, "Sample partition time is %f\n", partition_time_secs);
 	
 		//Coefficent B is expected to be really small and so we just use the default. 
 		fprintf(stderr, "Default partition coeff A: %f\n", partition_overhead_coefficient_a);
@@ -496,7 +494,7 @@ static void show_help(const char *cmd) {
 	fprintf(stdout, " %-30s Specify a project name for the Work Queue master. (default = none)\n", "-N <string>");
 	fprintf(stdout, " %-30s Specify the number of partitions to create of the input data. (default = 20)\n", "-k <int>");
 	fprintf(stdout, " %-30s Specify the output file name for the sorted records. (default = <infile>.sorted)\n", "-o <string>");
-	fprintf(stdout, " %-30s Automatically determine the optimal partition size. (default = 20)\n", "-A <int>");
+	fprintf(stdout, " %-30s Automatically determine the optimal partition size. (default = 20)\n", "-A");
 	fprintf(stdout, " %-30s Empirically estimate the model coefficients by sampling the execution environment. (default = off)\n", "-S");
 	fprintf(stdout, " %-30s Specify the number of sample partitions. (default = %d)\n", "-s <int>", SAMPLE_SIZE_DEFAULT);
 	fprintf(stdout, " %-30s Specify the arguments for the sort program.\n", "-p <string>");
@@ -523,7 +521,7 @@ int main(int argc, char *argv[])
 	int print_runtime_estimates = 0;
 	int estimate_partition= 0;
 	struct timeval current;
-	long long unsigned int execn_start_time, execn_time;
+	long long unsigned int execn_start_time, execn_time, workload_runtime;
 	int keepalive_interval = 300;
 	int keepalive_timeout = 30;
 
@@ -741,15 +739,17 @@ int main(int argc, char *argv[])
 	
 	fprintf(stdout, "Sorting complete. Output is at: %s!\n", outfile);
 
-	execn_time = merge_end_time - execn_start_time;
-	fprintf(stdout, "Execn time is %llu\n", execn_time);
+	workload_runtime = execn_time = merge_end_time - execn_start_time;
+	fprintf(stdout, "Workload execn time is %llu\n", workload_runtime);
+	fprintf(stdout, "Total execn time is %llu\n", execn_time);
 
 	FILE *time_file = fopen("wq_sort.times", "w");
 	if (time_file) {
 		fprintf(time_file, "Partition time: %llu\n", part_time);
 		fprintf(time_file, "Parallel time: %llu\n", parallel_time);
 		fprintf(time_file, "Merge time: %llu\n", merge_time);
-		fprintf(time_file, "Execution time: %llu\n", execn_time);
+		fprintf(time_file, "Workload execution time: %llu\n", workload_runtime);
+		fprintf(time_file, "Total execution time: %llu\n", execn_time);
 	}
 	fclose(time_file);
 
