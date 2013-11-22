@@ -28,13 +28,13 @@
 
 //Defaults
 #define PARTITION_DEFAULT 20
-#define BW_DEFAULT 100 //BW in Mbps
+#define BW_DEFAULT 100 //BW in MBps
 #define SAMPLE_SIZE_DEFAULT 2 
 
-#define PARTITION_COEFF_A_DEFAULT 175 
+#define PARTITION_COEFF_A_DEFAULT 175 //195 
 #define PARTITION_COEFF_B_DEFAULT 0.00005 
 #define MERGE_COEFF_A_DEFAULT 10  
-#define MERGE_COEFF_B_DEFAULT 375
+#define MERGE_COEFF_B_DEFAULT 375 //435 
 #define PER_RECORD_SORT_TIME_DEFAULT 0.000003
 
 double partition_overhead_coefficient_a = PARTITION_COEFF_A_DEFAULT;
@@ -42,7 +42,7 @@ double partition_overhead_coefficient_b = PARTITION_COEFF_B_DEFAULT;
 double merge_overhead_coefficient_a = MERGE_COEFF_A_DEFAULT;
 double merge_overhead_coefficient_b = MERGE_COEFF_B_DEFAULT;
 double per_record_sort_time = PER_RECORD_SORT_TIME_DEFAULT;
-double bandwidth_bytes_per_sec = BW_DEFAULT * 1000000 / 8.0;
+double bandwidth_bytes_per_sec = BW_DEFAULT * 1000000; 
 	
 static int created_partitions = 0;	
 static int run_timing_code = 0;
@@ -494,7 +494,7 @@ static void show_help(const char *cmd) {
 	fprintf(stdout, " %-30s Specify the keepalive interval for WQ.(default=300).\n", "-I <int>");
 	fprintf(stdout, " %-30s Specify the keepalive timeout for WQ.(default=30).\n", "-T <int>");
 	fprintf(stdout, " %-30s Estimate and print the runtime for specified partition and exit.\n", "-R <int>");
-	fprintf(stdout, " %-30s Set the estimated bandwidth to workers for estimating optimal paritions. (default=%d)\n", "-B <int>", BW_DEFAULT);
+	fprintf(stdout, " %-30s Set the estimated bandwidth (in MBps) to workers for estimating optimal paritions. (default=%d)\n", "-B <int>", BW_DEFAULT);
 	fprintf(stdout, " %-30s Show this help screen\n", "-h,--help");
 }
 
@@ -568,7 +568,7 @@ int main(int argc, char *argv[])
 			keepalive_timeout = atoi(optarg);
 			break;
 		case 'B':
-			bandwidth_bytes_per_sec = atoi(optarg) * 1000000 / 8.0;
+			bandwidth_bytes_per_sec = atoi(optarg) * 1000000; 
 			break;
 		case 'h':
 			show_help(argv[0]);
@@ -656,7 +656,7 @@ int main(int argc, char *argv[])
 	if(sample_env) {
 		gettimeofday(&current, 0);
 		sample_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-		int sample_record_size = (10*records)/100; //sample size is 10% of the total records
+		int sample_record_size = (5*records)/100; //sample size is 5% of the total records
 		
 		char *sample_partition_file_prefix = (char *) malloc((strlen(outfile)+8) * sizeof(char));
 		sprintf(sample_partition_file_prefix, "%s.sample", outfile);
