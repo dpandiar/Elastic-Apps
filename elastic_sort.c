@@ -516,7 +516,7 @@ int main(int argc, char *argv[])
 	int keepalive_interval = 300;
 	int keepalive_timeout = 30;
 
-	unsigned long long records;	
+	unsigned long long records = 0;
 	int partitions = PARTITION_DEFAULT;
 	int sample_size = SAMPLE_SIZE_DEFAULT;
 
@@ -599,6 +599,7 @@ int main(int argc, char *argv[])
 
 	if(records == 0) {
 		records = get_total_lines(infile);
+		fprintf(stdout, "Input file %s has %llu records to sort\n", infile, records);
 		if(records < 0) {
 			fprintf(stderr, "Error in reading records. Quitting...\n");
 			return 0;	
