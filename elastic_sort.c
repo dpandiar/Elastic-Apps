@@ -322,19 +322,23 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	return 1;
 }
 
-double wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_file) {
+double wait_partition_tasks(struct work_queue *q, int timeout) {
 	struct work_queue_task *t;	
 	FILE *task_times_fp = NULL;
+	FILE *task_overheads_fp = NULL;
 
 	double task_execution_times = 0;
 	int64_t total_transfered_bytes = 0;
 	time_t total_transfer_time = 0;
 
-	if(task_times_file) {
-		task_times_fp = fopen("elastic_sort.tasktimes", "w");
-		if (!task_times_fp) {
-        	fprintf(stderr, "Opening of elastic_sort.tasktimes file failed!\n");
-    	}
+	task_times_fp = fopen("elastic_sort.tasktimes", "w");
+	if (!task_times_fp) {
+		fprintf(stderr, "Opening of elastic_sort.tasktimes file failed!\n");
+	}	
+	
+	task_overheads_fp = fopen("elastic_sort.taskoverheads", "w");
+	if (!task_overheads_fp) {
+		fprintf(stderr, "Opening of elastic_sort.overheads file failed!\n");
 	}
 
 	while(!work_queue_empty(q)) {
@@ -353,6 +357,9 @@ double wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_
 
 			if(task_times_fp) {
 				fprintf(task_times_fp, "%d: %llu\n", t->taskid, (long long unsigned) t->cmd_execution_time);	
+			}
+			if(task_overheads_fp) {
+				fprintf(task_overheads_fp, "%d %llu %llu %llu %llu %llu %llu %llu %llu\n", t->taskid, (long long unsigned) t->time_send_input_start, (long long unsigned) t->time_send_input_finish, (long long unsigned) t->time_execute_cmd_start, (long long unsigned) t->time_execute_cmd_finish, (long long unsigned) t->time_receive_result_start, (long long unsigned) t->time_receive_result_finish, (long long unsigned) t->time_receive_output_start, (long long unsigned) t->time_receive_output_finish);	
 			}	
 			
 			work_queue_task_delete(t);
@@ -361,6 +368,8 @@ double wait_partition_tasks(struct work_queue *q, int timeout, char *task_times_
 
 	if(task_times_fp)	
 		fclose(task_times_fp);
+	if(task_overheads_fp)	
+		fclose(task_overheads_fp);
 
 	return task_execution_times;
 }	
@@ -378,7 +387,7 @@ off_t sample_run(struct work_queue *q, const char *executable, const char *execu
 	
 	off_t partition_offset_end = partition_tasks(q, executable, executable_args, infile, infile_offset_start, partition_file_prefix, partitions, records_to_sort);	
 	
-	sample_task_runtimes = wait_partition_tasks(q, 5, NULL);
+	sample_task_runtimes = wait_partition_tasks(q, 5);
 	fprintf(stderr, "Sample task times: %f\n", sample_task_runtimes);
 	fprintf(stderr, "Default per record sort time: %f\n", per_record_sort_time);
 	per_record_sort_time = sample_task_runtimes/(double)records_to_sort;
@@ -723,10 +732,7 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	parallel_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	char *record_task_times_file = (char *)malloc((strlen(outfile)+11) * sizeof(char));
-	sprintf(record_task_times_file, "%s.tasktimes", outfile);	
-	wait_partition_tasks(q, 5, record_task_times_file);	
-	free(record_task_times_file);
+	wait_partition_tasks(q, 5); 
 
 	gettimeofday(&current, 0);
 	parallel_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
