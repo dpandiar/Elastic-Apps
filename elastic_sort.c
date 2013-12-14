@@ -493,6 +493,7 @@ static void show_help(const char *cmd) {
 	fprintf(stdout, " %-30s Specify the number of records in the input file.(default=auto).\n", "-L <int>");
 	fprintf(stdout, " %-30s Specify the keepalive interval for WQ.(default=300).\n", "-I <int>");
 	fprintf(stdout, " %-30s Specify the keepalive timeout for WQ.(default=30).\n", "-T <int>");
+	fprintf(stdout, " %-30s Specify the number of workers to wait before WQ starts dipatching tasks.(default=disabled).\n", "-W <int>");
 	fprintf(stdout, " %-30s Estimate and print the runtime for specified partition and exit.\n", "-R <int>");
 	fprintf(stdout, " %-30s Set the estimated bandwidth (in MBps) to workers for estimating optimal paritions. (default=%d)\n", "-B <int>", BW_DEFAULT);
 	fprintf(stdout, " %-30s Show this help screen\n", "-h,--help");
@@ -515,6 +516,7 @@ int main(int argc, char *argv[])
 	long long unsigned int execn_start_time, execn_time, workload_runtime;
 	int keepalive_interval = 300;
 	int keepalive_timeout = 30;
+	int workers_to_wait = 0;
 
 	unsigned long long records = 0;
 	int partitions = PARTITION_DEFAULT;
@@ -529,7 +531,7 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 		
-	while((c = getopt(argc, argv, "N:k:o:ASs:p:MR:L:I:T:B:h")) != (char) -1) {
+	while((c = getopt(argc, argv, "N:k:o:ASs:p:MR:L:I:T:B:W:h")) != (char) -1) {
 		switch (c) {
 		case 'N':
 			proj_name = strdup(optarg);
@@ -569,6 +571,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'B':
 			bandwidth_bytes_per_sec = atoi(optarg) * 1000000; 
+			break;
+		case 'W':
+			workers_to_wait = atoi(optarg);
 			break;
 		case 'h':
 			show_help(argv[0]);
@@ -646,10 +651,14 @@ int main(int argc, char *argv[])
 		work_queue_specify_master_mode(q, WORK_QUEUE_MASTER_MODE_CATALOG);	
 		work_queue_specify_name(q, proj_name);
 	}
+	free((void *)proj_name);
+	
 	work_queue_specify_keepalive_interval(q, keepalive_interval);
 	work_queue_specify_keepalive_timeout(q, keepalive_timeout);
 
-	free((void *)proj_name);
+	if(workers_to_wait > 0) {
+		work_queue_activate_worker_waiting(q, workers_to_wait);
+	}
 
 	fprintf(stdout, "%s will be run to sort contents of %s\n", sort_executable, infile);
 
