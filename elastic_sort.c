@@ -244,7 +244,7 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 	outfile_fp = fopen(outfile, "w");
 	if(!outfile_fp) {
 		fprintf(stderr, "Opening file %s failed: %s!\n", outfile, strerror(errno));
-		return -1;	
+		return 0;
 	}	
 	
 	partition_file_line_vals = malloc(sizeof(int) * partitions);
@@ -260,8 +260,7 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 		partition_file_fps[i] = fopen(partition_file, "r");
 		if(!partition_file_fps[i]) {
 			fprintf(stderr, "Opening file %s failed: %s!\n", partition_file, strerror(errno));
-			goto cleanup;	
-			return -1;	
+			return 0;	
 		}
 	}
 
@@ -301,7 +300,6 @@ int merge_sorted_outputs(const char *outfile, const char *partition_file_prefix,
 		}
 	}
 
-  cleanup:
 	for(i = 0; i < partitions; i++) {
 		fclose(partition_file_fps[i]);
 		sprintf(partition_file, "%s.%d", partition_file_prefix, i);	
@@ -393,7 +391,9 @@ off_t sample_run(struct work_queue *q, const char *executable, const char *execu
 	per_record_sort_time = sample_task_runtimes/(double)records_to_sort;
 	fprintf(stderr, "Computed per record sort time: %f\n", per_record_sort_time);
 
-	merge_sorted_outputs(outfile, partition_file_prefix, partitions);	
+	if (!merge_sorted_outputs(outfile, partition_file_prefix, partitions)) {
+		return 0;	
+	}
 	
 	run_timing_code = 0; //turn off timing code.
 	
@@ -743,7 +743,9 @@ int main(int argc, char *argv[])
 	gettimeofday(&current, 0);
 	merge_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
 
-	merge_sorted_outputs(outfile, outfile, created_partitions);	
+	if(!merge_sorted_outputs(outfile, outfile, created_partitions)){
+		goto cleanup;
+	}
 	
 	gettimeofday(&current, 0);
 	merge_end_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
@@ -769,6 +771,7 @@ int main(int argc, char *argv[])
 	}
 	fclose(time_file);
 
+      cleanup:
 	work_queue_delete(q);
 	
 	free(outfile);
