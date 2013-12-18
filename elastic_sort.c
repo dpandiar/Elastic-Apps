@@ -407,7 +407,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, unsigned long 
 	
 	double partition_overhead;
 	double merge_overhead;
-	double parallel_execution_time;
+	double task_execution_time;
 	double transfer_overhead;	
 	double total_execution_time;
 	double *estimated_times;
@@ -436,8 +436,8 @@ double* sort_estimate_runtime(char *input_file, char *executable, unsigned long 
 	//we transfer the records twice - for input and output.
 	transfer_overhead = ((double)((2*record_bytes) + (sw_bytes * resources))) / bandwidth_bytes_per_sec;
 
-	parallel_execution_time = (records * per_record_sort_time) / tasks;	
-	parallel_execution_time *= ceil((double)tasks/(double)resources);
+	task_execution_time = (records * per_record_sort_time) / tasks;	
+	task_execution_time *= ceil((double)tasks/(double)resources);
 	
 	/* Model of partition is based on the partitioning done in partition_tasks():
 	 * Its asymptotic runtime is O(n+m) where n is number of records and m is number of partitions.
@@ -451,7 +451,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, unsigned long 
 	 */
 	merge_overhead = (merge_overhead_coefficient_a * records_in_billion * tasks) + (merge_overhead_coefficient_b * records_in_billion);	
 	
-	total_execution_time = partition_overhead + merge_overhead + parallel_execution_time + transfer_overhead;
+	total_execution_time = partition_overhead + merge_overhead + task_execution_time + transfer_overhead;
 
 	estimated_times = (double *)malloc(sizeof(double) * 5);
 	if (estimated_times == NULL) {
@@ -461,7 +461,7 @@ double* sort_estimate_runtime(char *input_file, char *executable, unsigned long 
 	estimated_times[0] = total_execution_time;
 	estimated_times[1] = partition_overhead;
 	estimated_times[2] = merge_overhead;
-	estimated_times[3] = parallel_execution_time;
+	estimated_times[3] = task_execution_time;
 	estimated_times[4] = transfer_overhead;
 	return estimated_times;
 }
@@ -675,7 +675,7 @@ int main(int argc, char *argv[])
 	if(sample_env) {
 		gettimeofday(&current, 0);
 		sample_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-		int sample_record_size = (5*records)/100; //sample size is 5% of the total records
+		int sample_record_size = (2*records)/100; //sample size is 5% of the total records
 		
 		char *sample_partition_file_prefix = (char *) malloc((strlen(outfile)+8) * sizeof(char));
 		sprintf(sample_partition_file_prefix, "%s.sample", outfile);
