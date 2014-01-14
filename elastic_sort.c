@@ -675,7 +675,7 @@ int main(int argc, char *argv[])
 	if(sample_env) {
 		gettimeofday(&current, 0);
 		sample_start_time = ((long long unsigned int) current.tv_sec) * 1000000 + current.tv_usec;
-		int sample_record_size = (2*records)/100; //sample size is 5% of the total records
+		int sample_record_size = (2*records)/100; //sample size is 2% of the total records
 		
 		char *sample_partition_file_prefix = (char *) malloc((strlen(outfile)+8) * sizeof(char));
 		sprintf(sample_partition_file_prefix, "%s.sample", outfile);
