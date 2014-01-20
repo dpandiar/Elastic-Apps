@@ -30,6 +30,7 @@
 #define PARTITION_DEFAULT 20
 #define BW_DEFAULT 100 //BW in MBps
 #define SAMPLE_SIZE_DEFAULT 2 
+#define MIN_MEMORY_DEFAULT 3.5 //in gb; corresponds to medium instances in EC2 & Azure
 
 #define PARTITION_COEFF_A_DEFAULT 175 //195 
 #define PARTITION_COEFF_B_DEFAULT 0.00005 
@@ -43,6 +44,7 @@ double merge_overhead_coefficient_a = MERGE_COEFF_A_DEFAULT;
 double merge_overhead_coefficient_b = MERGE_COEFF_B_DEFAULT;
 double per_record_sort_time = PER_RECORD_SORT_TIME_DEFAULT;
 double bandwidth_bytes_per_sec = BW_DEFAULT * 1000000; 
+double observed_min_memory_gb = MIN_MEMORY_DEFAULT;
 	
 static int created_partitions = 0;	
 static int run_timing_code = 0;
@@ -376,6 +378,7 @@ double wait_partition_tasks(struct work_queue *q, int timeout) {
 off_t sample_run(struct work_queue *q, const char *executable, const char *executable_args, const char *infile, int infile_offset_start, const char *partition_file_prefix, const char *outfile, int partitions, unsigned long long records_to_sort) {
 
 	double sample_task_runtimes = 0;
+	struct work_queue_stats wq_stats;
 
 	fprintf(stdout, "Sampling the execution environment with %d partitions!\n", partitions);
 
@@ -394,13 +397,30 @@ off_t sample_run(struct work_queue *q, const char *executable, const char *execu
 	if (!merge_sorted_outputs(outfile, partition_file_prefix, partitions)) {
 		return 0;	
 	}
-	
+
+	work_queue_get_stats (q, &wq_stats);
+	observed_min_memory_gb = wq_stats.min_memory/1000.0;
+	fprintf(stderr, "Observed minimum memory size in GB is: %f\n", observed_min_memory_gb);
+
 	run_timing_code = 0; //turn off timing code.
 	
 	created_partitions = 1;	 //we merge the sample partitions to 1.
 	return partition_offset_end;
 }
 
+int get_memory_limited_partitions(char *input_file, double observed_memory_gb) {
+	struct stat stat_buf;
+	long long record_bytes_mb = 0;
+	double observed_memory_mb = observed_memory_gb*1000.0;
+
+	if(!stat(input_file, &stat_buf)){
+		record_bytes_mb = (stat_buf.st_size/1000000);
+	} else {
+		return 0;
+	}
+	
+	return (ceil((double)record_bytes_mb/observed_memory_mb));
+}
 
 double* sort_estimate_runtime(char *input_file, char *executable, unsigned long long records, int resources, int tasks) {
 	//Model: T(n,k,r) = [T_part + T_merge] + [(t*n)/k * ceil(k/r)] + [(d_n + (d_r * r))/BW_Bps]
@@ -705,7 +725,15 @@ int main(int argc, char *argv[])
 				optimal_resources = i;	
 			}
 		}
-		fprintf(stdout, "Optimal partition size is %d that runs the workload in %f\n", optimal_partitions, current_optimal_time);	
+
+		int memory_limited_partitions = get_memory_limited_partitions(infile, observed_min_memory_gb);
+		if(memory_limited_partitions > optimal_partitions) {
+			fprintf(stdout, "Optimal partition size (%d) is increased to %d due to the observed memory size.\n", optimal_partitions, memory_limited_partitions);	
+			optimal_partitions = memory_limited_partitions;
+			optimal_resources = optimal_partitions;
+		}
+
+		fprintf(stdout, "Optimal partition size for sorting %llu records is %d.\n", records, optimal_partitions);	
 		fprintf(stdout, "--> Please allocate %d resources for running this workload in a cost-efficient manner.\n", optimal_resources);	
 		partitions = optimal_partitions;	
 	}
